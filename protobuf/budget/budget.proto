@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package service.budget;
+
+option go_package = "github.com/philandz/philand/protobuf/budget";
+
+import "libs/protobuf/common/base.proto";
+import "libs/protobuf/google/api/annotations.proto";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum BudgetType {
+  BUDGET_TYPE_UNSPECIFIED = 0;
+  BUDGET_TYPE_STANDARD    = 1;
+  BUDGET_TYPE_SAVING      = 2;
+  BUDGET_TYPE_DEBT        = 3;
+  BUDGET_TYPE_INVEST      = 4;
+  BUDGET_TYPE_SHARING     = 5;
+}
+
+enum BudgetRole {
+  BUDGET_ROLE_UNSPECIFIED  = 0;
+  BUDGET_ROLE_OWNER        = 1;
+  BUDGET_ROLE_MANAGER      = 2;
+  BUDGET_ROLE_CONTRIBUTOR  = 3;
+  BUDGET_ROLE_VIEWER       = 4;
+}
+
+enum RolloverPolicy {
+  ROLLOVER_POLICY_UNSPECIFIED    = 0;
+  ROLLOVER_POLICY_RESET          = 1;
+  ROLLOVER_POLICY_CARRY_FORWARD  = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Core messages
+// ---------------------------------------------------------------------------
+
+message Budget {
+  common.base.Base base  = 1;
+  string org_id          = 2;
+  string name            = 3;
+  BudgetType budget_type = 4;
+  string currency        = 5;  // ISO 4217, e.g. "VND", "USD"
+  BudgetRole my_role     = 6;  // populated per-user in list/get responses
+}
+
+message BudgetMember {
+  string budget_id    = 1;
+  string user_id      = 2;
+  string display_name = 3;
+  string email        = 4;
+  BudgetRole role     = 5;
+}
+
+message EnvelopeLimit {
+  string budget_id        = 1;
+  int64  monthly_limit    = 2;  // in smallest currency unit (e.g., VND)
+  int64  current_spend    = 3;  // spend so far this month
+  double burn_rate_pct    = 4;  // projected % of limit consumed by month-end (0–100+)
+  bool   limit_exceeded   = 5;
+}
+
+message BudgetTemplate {
+  string id          = 1;
+  string name        = 2;
+  string description = 3;
+  BudgetType budget_type = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Budget CRUD
+// ---------------------------------------------------------------------------
+
+message CreateBudgetRequest {
+  string org_id      = 1;
+  string name        = 2;
+  BudgetType budget_type = 3;
+  string currency    = 4;
+  string template_id = 5;  // optional — apply a preset category structure
+}
+message CreateBudgetResponse { Budget budget = 1; }
+
+message GetBudgetRequest  { string budget_id = 1; }
+message GetBudgetResponse { Budget budget = 1; }
+
+message UpdateBudgetRequest {
+  string budget_id   = 1;
+  string name        = 2;
+  BudgetType budget_type = 3;
+}
+message UpdateBudgetResponse { Budget budget = 1; }
+
+message DeleteBudgetRequest  { string budget_id = 1; }
+message DeleteBudgetResponse { bool success = 1; }
+
+message ListBudgetsRequest  { string org_id = 1; }
+message ListBudgetsResponse { repeated Budget budgets = 1; }
+
+// ---------------------------------------------------------------------------
+// Role authority (internal — called by Entry, Category, Sharing services)
+// ---------------------------------------------------------------------------
+
+message CheckRoleRequest {
+  string user_id   = 1;
+  string budget_id = 2;
+}
+message CheckRoleResponse {
+  BudgetRole role     = 1;
+  bool       is_member = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Budget members
+// ---------------------------------------------------------------------------
+
+message AddBudgetMemberRequest {
+  string budget_id = 1;
+  string user_id   = 2;
+  BudgetRole role  = 3;
+}
+message AddBudgetMemberResponse { BudgetMember member = 1; }
+
+message UpdateBudgetMemberRoleRequest {
+  string budget_id = 1;
+  string user_id   = 2;
+  BudgetRole role  = 3;
+}
+message UpdateBudgetMemberRoleResponse { BudgetMember member = 1; }
+
+message RemoveBudgetMemberRequest {
+  string budget_id = 1;
+  string user_id   = 2;
+}
+message RemoveBudgetMemberResponse { bool success = 1; }
+
+message ListBudgetMembersRequest  { string budget_id = 1; }
+message ListBudgetMembersResponse { repeated BudgetMember members = 1; }
+
+// ---------------------------------------------------------------------------
+// Envelope limits & burn-rate
+// ---------------------------------------------------------------------------
+
+message SetEnvelopeLimitRequest {
+  string budget_id     = 1;
+  int64  monthly_limit = 2;  // 0 = remove limit
+}
+message SetEnvelopeLimitResponse { EnvelopeLimit envelope = 1; }
+
+message GetBurnRateRequest  { string budget_id = 1; }
+message GetBurnRateResponse { EnvelopeLimit envelope = 1; }
+
+// ---------------------------------------------------------------------------
+// Rollover policy
+// ---------------------------------------------------------------------------
+
+message SetRolloverPolicyRequest {
+  string budget_id         = 1;
+  RolloverPolicy policy    = 2;
+}
+message SetRolloverPolicyResponse { RolloverPolicy policy = 1; }
+
+message GetRolloverPolicyRequest  { string budget_id = 1; }
+message GetRolloverPolicyResponse { RolloverPolicy policy = 1; }
+
+// ---------------------------------------------------------------------------
+// Budget templates
+// ---------------------------------------------------------------------------
+
+message ListTemplatesRequest  {}
+message ListTemplatesResponse { repeated BudgetTemplate templates = 1; }
+
+// ---------------------------------------------------------------------------
+// Service definition
+// ---------------------------------------------------------------------------
+
+service BudgetService {
+  // Budget CRUD
+  rpc CreateBudget(CreateBudgetRequest) returns (CreateBudgetResponse) {
+    option (google.api.http) = { post: "/budgets" body: "*" };
+  }
+  rpc GetBudget(GetBudgetRequest) returns (GetBudgetResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}" };
+  }
+  rpc UpdateBudget(UpdateBudgetRequest) returns (UpdateBudgetResponse) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}" body: "*" };
+  }
+  rpc DeleteBudget(DeleteBudgetRequest) returns (DeleteBudgetResponse) {
+    option (google.api.http) = { delete: "/budgets/{budget_id}" };
+  }
+  rpc ListBudgets(ListBudgetsRequest) returns (ListBudgetsResponse) {
+    option (google.api.http) = { get: "/budgets" };
+  }
+
+  // Role authority (internal — no public HTTP binding)
+  rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}
+
+  // Members
+  rpc AddBudgetMember(AddBudgetMemberRequest) returns (AddBudgetMemberResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/members" body: "*" };
+  }
+  rpc UpdateBudgetMemberRole(UpdateBudgetMemberRoleRequest) returns (UpdateBudgetMemberRoleResponse) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}/members/{user_id}/role" body: "*" };
+  }
+  rpc RemoveBudgetMember(RemoveBudgetMemberRequest) returns (RemoveBudgetMemberResponse) {
+    option (google.api.http) = { delete: "/budgets/{budget_id}/members/{user_id}" };
+  }
+  rpc ListBudgetMembers(ListBudgetMembersRequest) returns (ListBudgetMembersResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/members" };
+  }
+
+  // Envelope limits
+  rpc SetEnvelopeLimit(SetEnvelopeLimitRequest) returns (SetEnvelopeLimitResponse) {
+    option (google.api.http) = { put: "/budgets/{budget_id}/envelope-limit" body: "*" };
+  }
+  rpc GetBurnRate(GetBurnRateRequest) returns (GetBurnRateResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/burn-rate" };
+  }
+
+  // Rollover policy
+  rpc SetRolloverPolicy(SetRolloverPolicyRequest) returns (SetRolloverPolicyResponse) {
+    option (google.api.http) = { put: "/budgets/{budget_id}/rollover-policy" body: "*" };
+  }
+  rpc GetRolloverPolicy(GetRolloverPolicyRequest) returns (GetRolloverPolicyResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/rollover-policy" };
+  }
+
+  // Templates
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse) {
+    option (google.api.http) = { get: "/budget-templates" };
+  }
+}
