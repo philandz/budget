@@ -1,0 +1,392 @@
+syntax = "proto3";
+
+package service.budget;
+
+option go_package = "github.com/philandz/philand/protobuf/budget";
+
+import "libs/protobuf/common/base.proto";
+import "libs/protobuf/google/api/annotations.proto";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum BudgetType {
+  BUDGET_TYPE_UNSPECIFIED = 0;
+  BUDGET_TYPE_STANDARD    = 1;
+  BUDGET_TYPE_SAVING      = 2;
+  BUDGET_TYPE_DEBT        = 3;
+  BUDGET_TYPE_INVEST      = 4;
+  BUDGET_TYPE_SHARING     = 5;
+}
+
+enum BudgetRole {
+  BUDGET_ROLE_UNSPECIFIED  = 0;
+  BUDGET_ROLE_OWNER        = 1;
+  BUDGET_ROLE_MANAGER      = 2;
+  BUDGET_ROLE_CONTRIBUTOR  = 3;
+  BUDGET_ROLE_VIEWER       = 4;
+}
+
+enum RolloverPolicy {
+  ROLLOVER_POLICY_UNSPECIFIED    = 0;
+  ROLLOVER_POLICY_RESET          = 1;
+  ROLLOVER_POLICY_CARRY_FORWARD  = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Core messages
+// ---------------------------------------------------------------------------
+
+message Budget {
+  common.base.Base base  = 1;
+  string org_id          = 2;
+  string name            = 3;
+  BudgetType budget_type = 4;
+  string currency        = 5;  // ISO 4217, e.g. "VND", "USD"
+  BudgetRole my_role     = 6;  // populated per-user in list/get responses
+}
+
+message BudgetMember {
+  string budget_id    = 1;
+  string user_id      = 2;
+  string display_name = 3;
+  string email        = 4;
+  BudgetRole role     = 5;
+}
+
+message EnvelopeLimit {
+  string budget_id        = 1;
+  int64  monthly_limit    = 2;  // in smallest currency unit (e.g., VND)
+  int64  current_spend    = 3;  // spend so far this month
+  double burn_rate_pct    = 4;  // projected % of limit consumed by month-end (0–100+)
+  bool   limit_exceeded   = 5;
+}
+
+message BudgetTemplate {
+  string id          = 1;
+  string name        = 2;
+  string description = 3;
+  BudgetType budget_type = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Budget CRUD
+// ---------------------------------------------------------------------------
+
+message CreateBudgetRequest {
+  string org_id      = 1;
+  string name        = 2;
+  BudgetType budget_type = 3;
+  string currency    = 4;
+  string template_id = 5;  // optional — apply a preset category structure
+}
+message CreateBudgetResponse { Budget budget = 1; }
+
+message GetBudgetRequest  { string budget_id = 1; }
+message GetBudgetResponse { Budget budget = 1; }
+
+message UpdateBudgetRequest {
+  string budget_id   = 1;
+  string name        = 2;
+  BudgetType budget_type = 3;
+}
+message UpdateBudgetResponse { Budget budget = 1; }
+
+message DeleteBudgetRequest  { string budget_id = 1; }
+message DeleteBudgetResponse { bool success = 1; }
+
+message ListBudgetsRequest  { string org_id = 1; }
+message ListBudgetsResponse { repeated Budget budgets = 1; }
+
+// ---------------------------------------------------------------------------
+// Role authority (internal — called by Entry, Category, Sharing services)
+// ---------------------------------------------------------------------------
+
+message CheckRoleRequest {
+  string user_id   = 1;
+  string budget_id = 2;
+}
+message CheckRoleResponse {
+  BudgetRole role     = 1;
+  bool       is_member = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Budget members
+// ---------------------------------------------------------------------------
+
+message AddBudgetMemberRequest {
+  string budget_id = 1;
+  string user_id   = 2;
+  BudgetRole role  = 3;
+}
+message AddBudgetMemberResponse { BudgetMember member = 1; }
+
+message UpdateBudgetMemberRoleRequest {
+  string budget_id = 1;
+  string user_id   = 2;
+  BudgetRole role  = 3;
+}
+message UpdateBudgetMemberRoleResponse { BudgetMember member = 1; }
+
+message RemoveBudgetMemberRequest {
+  string budget_id = 1;
+  string user_id   = 2;
+}
+message RemoveBudgetMemberResponse { bool success = 1; }
+
+message ListBudgetMembersRequest  { string budget_id = 1; }
+message ListBudgetMembersResponse { repeated BudgetMember members = 1; }
+
+// ---------------------------------------------------------------------------
+// Envelope limits & burn-rate
+// ---------------------------------------------------------------------------
+
+message SetEnvelopeLimitRequest {
+  string budget_id     = 1;
+  int64  monthly_limit = 2;  // 0 = remove limit
+}
+message SetEnvelopeLimitResponse { EnvelopeLimit envelope = 1; }
+
+message GetBurnRateRequest  { string budget_id = 1; }
+message GetBurnRateResponse { EnvelopeLimit envelope = 1; }
+
+// ---------------------------------------------------------------------------
+// Rollover policy
+// ---------------------------------------------------------------------------
+
+message SetRolloverPolicyRequest {
+  string budget_id         = 1;
+  RolloverPolicy policy    = 2;
+}
+message SetRolloverPolicyResponse { RolloverPolicy policy = 1; }
+
+message GetRolloverPolicyRequest  { string budget_id = 1; }
+message GetRolloverPolicyResponse { RolloverPolicy policy = 1; }
+
+// ---------------------------------------------------------------------------
+// Budget templates
+// ---------------------------------------------------------------------------
+
+message ListTemplatesRequest  {}
+message ListTemplatesResponse { repeated BudgetTemplate templates = 1; }
+
+// ---------------------------------------------------------------------------
+// Invest assets
+// ---------------------------------------------------------------------------
+
+enum AssetType {
+  ASSET_TYPE_UNSPECIFIED     = 0;
+  ASSET_TYPE_SAVINGS_DEPOSIT = 1;
+  ASSET_TYPE_GOLD            = 2;
+  ASSET_TYPE_STOCK           = 3;
+}
+
+enum AssetStatus {
+  ASSET_STATUS_UNSPECIFIED = 0;
+  ASSET_STATUS_ACTIVE      = 1;
+  ASSET_STATUS_MATURED     = 2;
+  ASSET_STATUS_SOLD        = 3;
+  ASSET_STATUS_CLOSED      = 4;
+}
+
+message InvestAsset {
+  string      id          = 1;
+  string      budget_id   = 2;
+  AssetType   asset_type  = 3;
+  string      name        = 4;
+  AssetStatus status      = 5;
+
+  // savings_deposit
+  optional int64  principal           = 10;
+  optional double annual_rate         = 11;
+  optional string interest_type       = 12;  // simple | compound
+  optional string start_date          = 13;  // YYYY-MM-DD
+  optional string maturity_date       = 14;  // YYYY-MM-DD
+  optional string bank_name           = 15;
+
+  // gold
+  optional double quantity            = 20;
+  optional string unit                = 21;  // chi | luong | gram
+  optional int64  cost_basis_per_unit = 22;
+
+  // stock
+  optional string ticker              = 30;
+  optional string exchange            = 31;  // HOSE | HNX | UPCOM
+  optional int64  avg_cost_per_share  = 32;
+
+  // shared
+  optional string purchase_date       = 40;
+  optional string notes               = 41;
+
+  // computed (populated in responses)
+  int64  current_value   = 50;
+  int64  cost_basis      = 51;
+  int64  unrealized_pnl  = 52;
+  double pnl_pct         = 53;
+  string last_updated    = 54;  // ISO date of latest snapshot
+}
+
+message InvestPortfolioSummary {
+  string budget_id             = 1;
+  int64  total_current_value   = 2;
+  int64  total_cost_basis      = 3;
+  int64  total_unrealized_pnl  = 4;
+  double total_pnl_pct         = 5;
+  repeated InvestAsset assets  = 6;
+}
+
+message PriceSnapshot {
+  string id            = 1;
+  string asset_id      = 2;
+  int64  price         = 3;
+  string source        = 4;
+  string snapshot_date = 5;
+}
+
+// Invest asset CRUD
+message CreateInvestAssetRequest {
+  string    budget_id          = 1;
+  AssetType asset_type         = 2;
+  string    name               = 3;
+  optional int64  principal           = 10;
+  optional double annual_rate         = 11;
+  optional string interest_type       = 12;
+  optional string start_date          = 13;
+  optional string maturity_date       = 14;
+  optional string bank_name           = 15;
+  optional double quantity            = 20;
+  optional string unit                = 21;
+  optional int64  cost_basis_per_unit = 22;
+  optional string ticker              = 30;
+  optional string exchange            = 31;
+  optional int64  avg_cost_per_share  = 32;
+  optional string purchase_date       = 40;
+  optional string notes               = 41;
+}
+
+message UpdateInvestAssetRequest {
+  string asset_id              = 1;
+  optional string name               = 2;
+  optional double annual_rate        = 11;
+  optional string maturity_date      = 14;
+  optional string bank_name          = 15;
+  optional double quantity           = 20;
+  optional string unit               = 21;
+  optional int64  cost_basis_per_unit = 22;
+  optional int64  avg_cost_per_share  = 32;
+  optional string notes              = 41;
+}
+
+message DeleteInvestAssetRequest  { string asset_id = 1; }
+message DeleteInvestAssetResponse { bool success = 1; }
+
+message ListInvestAssetsRequest   { string budget_id = 1; }
+message ListInvestAssetsResponse  { repeated InvestAsset assets = 1; }
+
+message GetInvestPortfolioSummaryRequest  { string budget_id = 1; }
+
+// Price snapshots
+message AddPriceSnapshotRequest {
+  string asset_id      = 1;
+  int64  price         = 2;
+  string snapshot_date = 3;  // YYYY-MM-DD; defaults to today if empty
+}
+
+message GetLatestPriceSnapshotRequest { string asset_id = 1; }
+
+message ListPriceSnapshotsRequest {
+  string asset_id = 1;
+  int32  limit    = 2;  // default 90
+}
+message ListPriceSnapshotsResponse { repeated PriceSnapshot snapshots = 1; }
+
+// ---------------------------------------------------------------------------
+// Service definition
+// ---------------------------------------------------------------------------
+
+service BudgetService {
+  // Budget CRUD
+  rpc CreateBudget(CreateBudgetRequest) returns (CreateBudgetResponse) {
+    option (google.api.http) = { post: "/budgets" body: "*" };
+  }
+  rpc GetBudget(GetBudgetRequest) returns (GetBudgetResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}" };
+  }
+  rpc UpdateBudget(UpdateBudgetRequest) returns (UpdateBudgetResponse) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}" body: "*" };
+  }
+  rpc DeleteBudget(DeleteBudgetRequest) returns (DeleteBudgetResponse) {
+    option (google.api.http) = { delete: "/budgets/{budget_id}" };
+  }
+  rpc ListBudgets(ListBudgetsRequest) returns (ListBudgetsResponse) {
+    option (google.api.http) = { get: "/budgets" };
+  }
+
+  // Role authority (internal — no public HTTP binding)
+  rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}
+
+  // Members
+  rpc AddBudgetMember(AddBudgetMemberRequest) returns (AddBudgetMemberResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/members" body: "*" };
+  }
+  rpc UpdateBudgetMemberRole(UpdateBudgetMemberRoleRequest) returns (UpdateBudgetMemberRoleResponse) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}/members/{user_id}/role" body: "*" };
+  }
+  rpc RemoveBudgetMember(RemoveBudgetMemberRequest) returns (RemoveBudgetMemberResponse) {
+    option (google.api.http) = { delete: "/budgets/{budget_id}/members/{user_id}" };
+  }
+  rpc ListBudgetMembers(ListBudgetMembersRequest) returns (ListBudgetMembersResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/members" };
+  }
+
+  // Envelope limits
+  rpc SetEnvelopeLimit(SetEnvelopeLimitRequest) returns (SetEnvelopeLimitResponse) {
+    option (google.api.http) = { put: "/budgets/{budget_id}/envelope-limit" body: "*" };
+  }
+  rpc GetBurnRate(GetBurnRateRequest) returns (GetBurnRateResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/burn-rate" };
+  }
+
+  // Rollover policy
+  rpc SetRolloverPolicy(SetRolloverPolicyRequest) returns (SetRolloverPolicyResponse) {
+    option (google.api.http) = { put: "/budgets/{budget_id}/rollover-policy" body: "*" };
+  }
+  rpc GetRolloverPolicy(GetRolloverPolicyRequest) returns (GetRolloverPolicyResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/rollover-policy" };
+  }
+
+  // Templates
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse) {
+    option (google.api.http) = { get: "/budget-templates" };
+  }
+
+  // Invest assets
+  rpc CreateInvestAsset(CreateInvestAssetRequest) returns (InvestAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/invest/assets" body: "*" };
+  }
+  rpc UpdateInvestAsset(UpdateInvestAssetRequest) returns (InvestAsset) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}/invest/assets/{asset_id}" body: "*" };
+  }
+  rpc DeleteInvestAsset(DeleteInvestAssetRequest) returns (DeleteInvestAssetResponse) {
+    option (google.api.http) = { delete: "/budgets/{budget_id}/invest/assets/{asset_id}" };
+  }
+  rpc ListInvestAssets(ListInvestAssetsRequest) returns (ListInvestAssetsResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/invest/assets" };
+  }
+  rpc GetInvestPortfolioSummary(GetInvestPortfolioSummaryRequest) returns (InvestPortfolioSummary) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/invest/portfolio" };
+  }
+
+  // Price snapshots
+  rpc AddPriceSnapshot(AddPriceSnapshotRequest) returns (PriceSnapshot) {
+    option (google.api.http) = { post: "/invest/assets/{asset_id}/snapshots" body: "*" };
+  }
+  rpc GetLatestPriceSnapshot(GetLatestPriceSnapshotRequest) returns (PriceSnapshot) {
+    option (google.api.http) = { get: "/invest/assets/{asset_id}/snapshots/latest" };
+  }
+  rpc ListPriceSnapshots(ListPriceSnapshotsRequest) returns (ListPriceSnapshotsResponse) {
+    option (google.api.http) = { get: "/invest/assets/{asset_id}/snapshots" };
+  }
+}
