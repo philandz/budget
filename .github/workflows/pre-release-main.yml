@@ -1,0 +1,74 @@
+name: budget-pre-release-main
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: philand
+          MYSQL_USER: philand
+          MYSQL_PASSWORD: philand
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uphiland -pphiland"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DATABASE_URL: mysql://philand:philand@127.0.0.1:3306/philand
+      JWT_SECRET: prerelease-ci-secret
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout protobuf repo
+        uses: actions/checkout@v4
+        with:
+          repository: philandz/protobuf
+          ref: ${{ github.base_ref }}
+          path: protobuf
+          token: ${{ secrets.GH_REPO_PAT }}
+
+      - name: Checkout libs repo
+        uses: actions/checkout@v4
+        with:
+          repository: philandz/libs
+          ref: ${{ github.base_ref }}
+          path: libs
+          token: ${{ secrets.GH_REPO_PAT }}
+
+      - name: Link shared repos for path dependencies
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/libs" "$GITHUB_WORKSPACE/../libs"
+          ln -sfn "$GITHUB_WORKSPACE/protobuf" "$GITHUB_WORKSPACE/../protobuf"
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test
