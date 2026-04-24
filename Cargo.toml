@@ -28,7 +28,6 @@ tokio-stream = "0.1"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 philand_logging    = { package = "logging",     path = "../libs/logging" }
-philand_error      = { package = "error",       path = "../libs/error", features = ["utoipa"] }
 philand_configs    = { package = "configs",     path = "../libs/configs" }
 philand_storage    = { package = "storage",     path = "../libs/storage" }
 philand_table      = { package = "table",       path = "../libs/table" }

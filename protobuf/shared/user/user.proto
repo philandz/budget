@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package shared.user;
+
+option go_package = "github.com/philandz/philand/protobuf/shared/user";
+import "libs/protobuf/common/base.proto";
+
+message User {
+  common.base.Base base = 1;
+  string email = 2;
+  string password_hash = 3;
+  string display_name = 4;
+  UserType user_type = 5;
+  // URL-only avatar field (http/https).
+  string avatar = 6;
+  string bio = 7;
+  string timezone = 8;
+  string locale = 9;
+}
+
+enum UserType {
+  // Default value must be 0
+  UT_NONE = 0;
+  UT_NORMAL = 1;
+  UT_SUPER_ADMIN = 2;
+}

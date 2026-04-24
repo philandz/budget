@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package shared.organization;
+
+option go_package = "github.com/philandz/philand/protobuf/shared/organization";
+import "libs/protobuf/common/base.proto";
+
+message Organization {
+  common.base.Base base = 1;
+  string name = 2;
+}
+
+message OrganizationMember {
+  string org_id = 1;
+  string user_id = 2;
+  OrgRole org_role = 3;
+  MemberStatus status = 4;
+  int64 joined_at = 5;
+}
+
+enum OrgRole {
+  OR_NONE = 0;
+  OR_OWNER = 1;
+  OR_ADMIN = 2;
+  OR_MEMBER = 3;
+}
+
+enum MemberStatus {
+  MS_NONE = 0;
+  MS_ACTIVE = 1;
+  MS_INVITED = 2;
+}
+
+enum InvitationStatus {
+  IS_NONE = 0;
+  IS_PENDING = 1;
+  IS_ACCEPTED = 2;
+  IS_EXPIRED = 3;
+  IS_REVOKED = 4;
+}

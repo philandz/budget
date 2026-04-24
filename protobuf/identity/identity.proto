@@ -1,0 +1,382 @@
+syntax = "proto3";
+
+package service.identity;
+
+option go_package = "github.com/philandz/philand/protobuf/identity";
+
+import "protobuf/shared/user/user.proto";
+import "protobuf/shared/organization/organization.proto";
+import "libs/protobuf/common/base.proto";
+import "libs/protobuf/google/api/annotations.proto";
+
+service IdentityService {
+  rpc Register(RegisterRequest) returns (RegisterResponse) {
+    option (google.api.http) = { post: "/register" body: "*" };
+  }
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (google.api.http) = { post: "/login" body: "*" };
+  }
+  rpc GetProfile(GetProfileRequest) returns (GetProfileResponse) {
+    option (google.api.http) = { get: "/profile" };
+  }
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse) {
+    option (google.api.http) = { patch: "/profile" body: "*" };
+  }
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse) {
+    option (google.api.http) = { get: "/organizations" };
+  }
+
+  // P0: Auth Hardening
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {
+    option (google.api.http) = { post: "/logout" body: "*" };
+  }
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse) {
+    option (google.api.http) = { post: "/refresh" body: "*" };
+  }
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {
+    option (google.api.http) = { post: "/update" body: "*" };
+  }
+  rpc ForgotPassword(ForgotPasswordRequest) returns (ForgotPasswordResponse) {
+    option (google.api.http) = { post: "/forgot" body: "*" };
+  }
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse) {
+    option (google.api.http) = { post: "/reset" body: "*" };
+  }
+
+  // P1: Organization IAM
+  rpc ListOrgMembers(ListOrgMembersRequest) returns (ListOrgMembersResponse) {
+    option (google.api.http) = { get: "/organizations/{org_id}/members" };
+  }
+  rpc InviteMember(InviteMemberRequest) returns (InviteMemberResponse) {
+    option (google.api.http) = { post: "/organizations/{org_id}/invitations" body: "*" };
+  }
+  rpc AcceptInvitation(AcceptInvitationRequest) returns (AcceptInvitationResponse) {
+    option (google.api.http) = { post: "/invitations/{token}/accept" body: "*" };
+  }
+  rpc ChangeOrgMemberRole(ChangeOrgMemberRoleRequest) returns (ChangeOrgMemberRoleResponse) {
+    option (google.api.http) = { patch: "/organizations/{org_id}/members/{user_id}/role" body: "*" };
+  }
+  rpc RemoveOrgMember(RemoveOrgMemberRequest) returns (RemoveOrgMemberResponse) {
+    option (google.api.http) = { delete: "/organizations/{org_id}/members/{user_id}" };
+  }
+
+  // P2: Super Admin Management (requires super_admin user_type — returns 403 otherwise)
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {
+    option (google.api.http) = { get: "/users" };
+  }
+  rpc GetUser(GetUserRequest) returns (GetUserResponse) {
+    option (google.api.http) = { get: "/users/{user_id}" };
+  }
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse) {
+    option (google.api.http) = { post: "/users" body: "*" };
+  }
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse) {
+    option (google.api.http) = { patch: "/users/{user_id}" body: "*" };
+  }
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse) {
+    option (google.api.http) = { delete: "/users/{user_id}" };
+  }
+  rpc ListOrganizationsAdmin(ListOrganizationsAdminRequest) returns (ListOrganizationsAdminResponse) {
+    option (google.api.http) = { get: "/organizations/all" };
+  }
+  rpc GetOrganizationAdmin(GetOrganizationAdminRequest) returns (GetOrganizationAdminResponse) {
+    option (google.api.http) = { get: "/organizations/{org_id}/detail" };
+  }
+  rpc CreateOrganizationAdmin(CreateOrganizationAdminRequest) returns (CreateOrganizationAdminResponse) {
+    option (google.api.http) = { post: "/organizations" body: "*" };
+  }
+  rpc UpdateOrganizationAdmin(UpdateOrganizationAdminRequest) returns (UpdateOrganizationAdminResponse) {
+    option (google.api.http) = { patch: "/organizations/{org_id}" body: "*" };
+  }
+  rpc DeleteOrganizationAdmin(DeleteOrganizationAdminRequest) returns (DeleteOrganizationAdminResponse) {
+    option (google.api.http) = { delete: "/organizations/{org_id}" };
+  }
+
+  // Internal — used by Budget service to resolve org membership during CheckRole fallback
+  rpc GetOrgRole(GetOrgRoleRequest) returns (GetOrgRoleResponse) {}
+}
+
+message RegisterRequest {
+  string email = 1;
+  string password = 2;
+  string display_name = 3;
+}
+
+message RegisterResponse {
+  shared.user.User user = 1;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string access_token = 1;
+  shared.user.UserType user_type = 2;
+  repeated OrganizationSummary organizations = 3; // Basic info for selection
+}
+
+message OrganizationSummary {
+  string id = 1;
+  string name = 2;
+  shared.organization.OrgRole role = 3;
+}
+
+message GetProfileRequest {}
+
+message GetProfileResponse {
+  shared.user.User user = 1;
+}
+
+message UpdateProfileRequest {
+  optional string display_name = 1;
+  optional string avatar = 2;
+  optional string bio = 3;
+  optional string timezone = 4;
+  optional string locale = 5;
+}
+
+message UpdateProfileResponse {
+  shared.user.User user = 1;
+}
+
+message ListOrganizationsRequest {}
+
+message ListOrganizationsResponse {
+  repeated OrganizationSummary organizations = 1;
+}
+
+// ---------------------------------------------------------------------------
+// P0: Auth Hardening
+// ---------------------------------------------------------------------------
+
+message LogoutRequest {}
+
+message LogoutResponse {}
+
+message RefreshTokenRequest {}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+}
+
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {}
+
+message ForgotPasswordRequest {
+  string email = 1;
+}
+
+message ForgotPasswordResponse {
+  string message = 1;
+}
+
+message ResetPasswordRequest {
+  string token = 1;
+  string new_password = 2;
+}
+
+message ResetPasswordResponse {}
+
+// ---------------------------------------------------------------------------
+// P1: Organization IAM
+// ---------------------------------------------------------------------------
+
+message OrgMemberView {
+  string user_id = 1;
+  string email = 2;
+  string display_name = 3;
+  shared.organization.OrgRole role = 4;
+  shared.organization.MemberStatus status = 5;
+  int64 joined_at = 6;
+}
+
+message OrganizationInvitation {
+  string id = 1;
+  string org_id = 2;
+  string inviter_id = 3;
+  string invitee_email = 4;
+  shared.organization.OrgRole org_role = 5;
+  shared.organization.InvitationStatus status = 6;
+  int64 expires_at = 7;
+  int64 created_at = 8;
+}
+
+message ListOrgMembersRequest {
+  string org_id = 1;
+}
+
+message ListOrgMembersResponse {
+  repeated OrgMemberView members = 1;
+}
+
+message InviteMemberRequest {
+  string org_id = 1;
+  string invitee_email = 2;
+  shared.organization.OrgRole org_role = 3;
+}
+
+message InviteMemberResponse {
+  OrganizationInvitation invitation = 1;
+  string invite_token = 2;
+}
+
+message AcceptInvitationRequest {
+  string token = 1;
+}
+
+message AcceptInvitationResponse {
+  string org_id = 1;
+  string role = 2;
+}
+
+message ChangeOrgMemberRoleRequest {
+  string org_id = 1;
+  string user_id = 2;
+  shared.organization.OrgRole org_role = 3;
+}
+
+message ChangeOrgMemberRoleResponse {}
+
+message RemoveOrgMemberRequest {
+  string org_id = 1;
+  string user_id = 2;
+}
+
+message RemoveOrgMemberResponse {}
+
+// ---------------------------------------------------------------------------
+// P2: Super Admin Management
+// ---------------------------------------------------------------------------
+
+/// Shared pagination + sort + filter params for admin list endpoints.
+message ListParams {
+  /// Full-text search query (searches name, email, etc.)
+  optional string query = 1;
+  /// Filter by status: "active" | "disabled" | "" (all)
+  optional string status = 2;
+  /// Column to sort by (e.g. "display_name", "email", "created_at")
+  optional string sort_by = 3;
+  /// Sort direction: "asc" | "desc" (default "asc")
+  optional string sort_dir = 4;
+  /// 1-based page number (default 1)
+  optional int32 page = 5;
+  /// Rows per page (default 20, max 100)
+  optional int32 page_size = 6;
+}
+
+/// Pagination metadata returned with every list response.
+message PageMeta {
+  int32 page = 1;
+  int32 page_size = 2;
+  int32 total_pages = 3;
+  int64 total_rows = 4;
+}
+
+message ListUsersRequest {
+  ListParams params = 1;
+  /// Filter by user_type: "normal" | "super_admin" | "" (all)
+  optional string user_type = 2;
+}
+
+message ListUsersResponse {
+  repeated shared.user.User users = 1;
+  PageMeta meta = 2;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  shared.user.User user = 1;
+}
+
+message CreateUserRequest {
+  string email = 1;
+  string password = 2;
+  string display_name = 3;
+  /// Optional: normal | super_admin (defaults to normal)
+  optional shared.user.UserType user_type = 4;
+}
+
+message CreateUserResponse {
+  shared.user.User user = 1;
+}
+
+message UpdateUserRequest {
+  string user_id = 1;
+  optional string display_name = 2;
+  optional shared.user.UserType user_type = 3;
+  optional common.base.BaseStatus status = 4;
+}
+
+message UpdateUserResponse {
+  shared.user.User user = 1;
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+}
+
+message DeleteUserResponse {}
+
+message ListOrganizationsAdminRequest {
+  ListParams params = 1;
+}
+
+message ListOrganizationsAdminResponse {
+  repeated shared.organization.Organization organizations = 1;
+  PageMeta meta = 2;
+}
+
+message GetOrganizationAdminRequest {
+  string org_id = 1;
+}
+
+message GetOrganizationAdminResponse {
+  shared.organization.Organization organization = 1;
+}
+
+message CreateOrganizationAdminRequest {
+  string name = 1;
+  string owner_user_id = 2;
+}
+
+message CreateOrganizationAdminResponse {
+  shared.organization.Organization organization = 1;
+}
+
+message UpdateOrganizationAdminRequest {
+  string org_id = 1;
+  optional string name = 2;
+  optional common.base.BaseStatus status = 3;
+}
+
+message UpdateOrganizationAdminResponse {
+  shared.organization.Organization organization = 1;
+}
+
+message DeleteOrganizationAdminRequest {
+  string org_id = 1;
+}
+
+message DeleteOrganizationAdminResponse {}
+
+// ---------------------------------------------------------------------------
+// Internal RPCs
+// ---------------------------------------------------------------------------
+
+message GetOrgRoleRequest {
+  string user_id = 1;
+  string org_id  = 2;
+}
+
+message GetOrgRoleResponse {
+  shared.organization.OrgRole role = 1;  // OR_NONE if not a member
+}

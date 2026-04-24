@@ -173,6 +173,136 @@ message ListTemplatesRequest  {}
 message ListTemplatesResponse { repeated BudgetTemplate templates = 1; }
 
 // ---------------------------------------------------------------------------
+// Invest assets
+// ---------------------------------------------------------------------------
+
+enum AssetType {
+  ASSET_TYPE_UNSPECIFIED     = 0;
+  ASSET_TYPE_SAVINGS_DEPOSIT = 1;
+  ASSET_TYPE_GOLD            = 2;
+  ASSET_TYPE_STOCK           = 3;
+}
+
+enum AssetStatus {
+  ASSET_STATUS_UNSPECIFIED = 0;
+  ASSET_STATUS_ACTIVE      = 1;
+  ASSET_STATUS_MATURED     = 2;
+  ASSET_STATUS_SOLD        = 3;
+  ASSET_STATUS_CLOSED      = 4;
+}
+
+message InvestAsset {
+  string      id          = 1;
+  string      budget_id   = 2;
+  AssetType   asset_type  = 3;
+  string      name        = 4;
+  AssetStatus status      = 5;
+
+  // savings_deposit
+  optional int64  principal           = 10;
+  optional double annual_rate         = 11;
+  optional string interest_type       = 12;  // simple | compound
+  optional string start_date          = 13;  // YYYY-MM-DD
+  optional string maturity_date       = 14;  // YYYY-MM-DD
+  optional string bank_name           = 15;
+
+  // gold
+  optional double quantity            = 20;
+  optional string unit                = 21;  // chi | luong | gram
+  optional int64  cost_basis_per_unit = 22;
+
+  // stock
+  optional string ticker              = 30;
+  optional string exchange            = 31;  // HOSE | HNX | UPCOM
+  optional int64  avg_cost_per_share  = 32;
+
+  // shared
+  optional string purchase_date       = 40;
+  optional string notes               = 41;
+
+  // computed (populated in responses)
+  int64  current_value   = 50;
+  int64  cost_basis      = 51;
+  int64  unrealized_pnl  = 52;
+  double pnl_pct         = 53;
+  string last_updated    = 54;  // ISO date of latest snapshot
+}
+
+message InvestPortfolioSummary {
+  string budget_id             = 1;
+  int64  total_current_value   = 2;
+  int64  total_cost_basis      = 3;
+  int64  total_unrealized_pnl  = 4;
+  double total_pnl_pct         = 5;
+  repeated InvestAsset assets  = 6;
+}
+
+message PriceSnapshot {
+  string id            = 1;
+  string asset_id      = 2;
+  int64  price         = 3;
+  string source        = 4;
+  string snapshot_date = 5;
+}
+
+// Invest asset CRUD
+message CreateInvestAssetRequest {
+  string    budget_id          = 1;
+  AssetType asset_type         = 2;
+  string    name               = 3;
+  optional int64  principal           = 10;
+  optional double annual_rate         = 11;
+  optional string interest_type       = 12;
+  optional string start_date          = 13;
+  optional string maturity_date       = 14;
+  optional string bank_name           = 15;
+  optional double quantity            = 20;
+  optional string unit                = 21;
+  optional int64  cost_basis_per_unit = 22;
+  optional string ticker              = 30;
+  optional string exchange            = 31;
+  optional int64  avg_cost_per_share  = 32;
+  optional string purchase_date       = 40;
+  optional string notes               = 41;
+}
+
+message UpdateInvestAssetRequest {
+  string asset_id              = 1;
+  optional string name               = 2;
+  optional double annual_rate        = 11;
+  optional string maturity_date      = 14;
+  optional string bank_name          = 15;
+  optional double quantity           = 20;
+  optional string unit               = 21;
+  optional int64  cost_basis_per_unit = 22;
+  optional int64  avg_cost_per_share  = 32;
+  optional string notes              = 41;
+}
+
+message DeleteInvestAssetRequest  { string asset_id = 1; }
+message DeleteInvestAssetResponse { bool success = 1; }
+
+message ListInvestAssetsRequest   { string budget_id = 1; }
+message ListInvestAssetsResponse  { repeated InvestAsset assets = 1; }
+
+message GetInvestPortfolioSummaryRequest  { string budget_id = 1; }
+
+// Price snapshots
+message AddPriceSnapshotRequest {
+  string asset_id      = 1;
+  int64  price         = 2;
+  string snapshot_date = 3;  // YYYY-MM-DD; defaults to today if empty
+}
+
+message GetLatestPriceSnapshotRequest { string asset_id = 1; }
+
+message ListPriceSnapshotsRequest {
+  string asset_id = 1;
+  int32  limit    = 2;  // default 90
+}
+message ListPriceSnapshotsResponse { repeated PriceSnapshot snapshots = 1; }
+
+// ---------------------------------------------------------------------------
 // Service definition
 // ---------------------------------------------------------------------------
 
@@ -230,5 +360,33 @@ service BudgetService {
   // Templates
   rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse) {
     option (google.api.http) = { get: "/budget-templates" };
+  }
+
+  // Invest assets
+  rpc CreateInvestAsset(CreateInvestAssetRequest) returns (InvestAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/invest/assets" body: "*" };
+  }
+  rpc UpdateInvestAsset(UpdateInvestAssetRequest) returns (InvestAsset) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}/invest/assets/{asset_id}" body: "*" };
+  }
+  rpc DeleteInvestAsset(DeleteInvestAssetRequest) returns (DeleteInvestAssetResponse) {
+    option (google.api.http) = { delete: "/budgets/{budget_id}/invest/assets/{asset_id}" };
+  }
+  rpc ListInvestAssets(ListInvestAssetsRequest) returns (ListInvestAssetsResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/invest/assets" };
+  }
+  rpc GetInvestPortfolioSummary(GetInvestPortfolioSummaryRequest) returns (InvestPortfolioSummary) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/invest/portfolio" };
+  }
+
+  // Price snapshots
+  rpc AddPriceSnapshot(AddPriceSnapshotRequest) returns (PriceSnapshot) {
+    option (google.api.http) = { post: "/invest/assets/{asset_id}/snapshots" body: "*" };
+  }
+  rpc GetLatestPriceSnapshot(GetLatestPriceSnapshotRequest) returns (PriceSnapshot) {
+    option (google.api.http) = { get: "/invest/assets/{asset_id}/snapshots/latest" };
+  }
+  rpc ListPriceSnapshots(ListPriceSnapshotsRequest) returns (ListPriceSnapshotsResponse) {
+    option (google.api.http) = { get: "/invest/assets/{asset_id}/snapshots" };
   }
 }
