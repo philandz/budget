@@ -28,6 +28,7 @@ pub struct DbBudgetMember {
     pub role: String,
     pub display_name: Option<String>,
     pub email: Option<String>,
+    pub avatar: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -128,6 +129,7 @@ pub fn map_budget_member(db: DbBudgetMember) -> BudgetMember {
         display_name: db.display_name.unwrap_or_default(),
         email: db.email.unwrap_or_default(),
         role: budget_role_from_db(&db.role) as i32,
+        avatar: db.avatar.unwrap_or_default(),
     }
 }
 
