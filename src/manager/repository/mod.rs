@@ -245,8 +245,11 @@ impl BudgetRepository {
 
     async fn get_member(&self, budget_id: &str, user_id: &str) -> Result<DbBudgetMember> {
         let row = sqlx::query_as::<_, DbBudgetMember>(
-            "SELECT budget_id, user_id, role, NULL AS display_name, NULL AS email
-             FROM budget_members WHERE budget_id = ? AND user_id = ?",
+            "SELECT bm.budget_id, bm.user_id, bm.role,
+                    u.display_name, u.email, u.avatar
+             FROM budget_members bm
+             LEFT JOIN users u ON u.id COLLATE utf8mb4_unicode_ci = bm.user_id COLLATE utf8mb4_unicode_ci
+             WHERE bm.budget_id = ? AND bm.user_id = ?",
         )
         .bind(budget_id)
         .bind(user_id)
