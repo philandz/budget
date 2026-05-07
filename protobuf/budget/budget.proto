@@ -53,6 +53,7 @@ message BudgetMember {
   string display_name = 3;
   string email        = 4;
   BudgetRole role     = 5;
+  string avatar       = 6;
 }
 
 message EnvelopeLimit {

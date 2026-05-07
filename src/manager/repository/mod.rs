@@ -230,10 +230,12 @@ impl BudgetRepository {
 
     pub async fn list_members(&self, budget_id: &str) -> Result<Vec<DbBudgetMember>> {
         let rows = sqlx::query_as::<_, DbBudgetMember>(
-            "SELECT budget_id, user_id, role,
-                    NULL AS display_name, NULL AS email
-             FROM budget_members WHERE budget_id = ?
-             ORDER BY created_at ASC",
+            "SELECT bm.budget_id, bm.user_id, bm.role,
+                    u.display_name, u.email, u.avatar
+             FROM budget_members bm
+             LEFT JOIN users u ON u.id = bm.user_id
+             WHERE bm.budget_id = ?
+             ORDER BY bm.created_at ASC",
         )
         .bind(budget_id)
         .fetch_all(&self.pool)
