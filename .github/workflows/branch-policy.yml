@@ -1,0 +1,23 @@
+name: Branch Policy
+
+on:
+  create:
+  push:
+
+jobs:
+  check-branch-name:
+    name: Enforce 3-branch policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          if [[ "$BRANCH" =~ ^(develop|sandbox|main)$ ]]; then
+            echo "Branch '$BRANCH' is allowed."
+          else
+            echo "ERROR: Branch '$BRANCH' is not allowed."
+            echo "Only 'develop', 'sandbox', and 'main' branches are permitted."
+            echo "See git flow policy in CLAUDE.md."
+            exit 1
+          fi
+
