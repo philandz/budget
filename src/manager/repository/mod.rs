@@ -280,7 +280,7 @@ impl BudgetRepository {
 
     pub async fn get_envelope_limit(&self, budget_id: &str) -> Result<Option<i64>> {
         let row: Option<(i64,)> =
-            sqlx::query_as("SELECT CAST(monthly_limit AS SIGNED) FROM budget_envelope_limits WHERE budget_id = ?")
+            sqlx::query_as("SELECT CAST(monthly_limit AS UNSIGNED) FROM budget_envelope_limits WHERE budget_id = ?")
                 .bind(budget_id)
                 .fetch_optional(&self.pool)
                 .await?;
