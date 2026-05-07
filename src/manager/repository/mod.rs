@@ -279,12 +279,17 @@ impl BudgetRepository {
     }
 
     pub async fn get_envelope_limit(&self, budget_id: &str) -> Result<Option<i64>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT CAST(monthly_limit AS CHAR) FROM budget_envelope_limits WHERE budget_id = ?")
-                .bind(budget_id)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row.map(|(v,)| v.parse::<i64>().unwrap_or(0)))
+        let row = sqlx::query("SELECT CAST(monthly_limit AS CHAR) FROM budget_envelope_limits WHERE budget_id = ?")
+            .bind(budget_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(r) => {
+                let val: String = sqlx::Row::get(&r, 0);
+                Ok(Some(val.parse::<i64>().unwrap_or(0)))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Sum of expense entries in the current calendar month (shared DB with Entry service).
