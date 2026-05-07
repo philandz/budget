@@ -233,7 +233,7 @@ impl BudgetRepository {
             "SELECT bm.budget_id, bm.user_id, bm.role,
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
-             LEFT JOIN users u ON u.id = bm.user_id
+             LEFT JOIN users u ON u.id COLLATE utf8mb4_unicode_ci = bm.user_id COLLATE utf8mb4_unicode_ci
              WHERE bm.budget_id = ?
              ORDER BY bm.created_at ASC",
         )
