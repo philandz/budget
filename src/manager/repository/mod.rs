@@ -230,10 +230,12 @@ impl BudgetRepository {
 
     pub async fn list_members(&self, budget_id: &str) -> Result<Vec<DbBudgetMember>> {
         let rows = sqlx::query_as::<_, DbBudgetMember>(
-            "SELECT budget_id, user_id, role,
-                    NULL AS display_name, NULL AS email
-             FROM budget_members WHERE budget_id = ?
-             ORDER BY created_at ASC",
+            "SELECT bm.budget_id, bm.user_id, bm.role,
+                    u.display_name, u.email, u.avatar
+             FROM budget_members bm
+             LEFT JOIN users u ON u.id = bm.user_id
+             WHERE bm.budget_id = ?
+             ORDER BY bm.created_at ASC",
         )
         .bind(budget_id)
         .fetch_all(&self.pool)
@@ -279,10 +281,12 @@ impl BudgetRepository {
     }
 
     pub async fn get_envelope_limit(&self, budget_id: &str) -> Result<Option<i64>> {
-        let row = sqlx::query("SELECT CAST(monthly_limit AS CHAR) FROM budget_envelope_limits WHERE budget_id = ?")
-            .bind(budget_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT CAST(CAST(monthly_limit AS CHAR) AS UNSIGNED) FROM budget_envelope_limits WHERE budget_id = ?"
+        )
+        .bind(budget_id)
+        .fetch_optional(&self.pool)
+        .await?;
         match row {
             Some(r) => {
                 let val: String = sqlx::Row::get(&r, 0);
@@ -297,8 +301,8 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string().parse::<i32>().unwrap_or(2026);
         let month = now.format("%m").to_string().parse::<i32>().unwrap_or(1);
-        let row: (Option<i64>,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(amount), 0) FROM budget_entries
+        let row = sqlx::query(
+            "SELECT CAST(COALESCE(SUM(amount), 0) AS CHAR) FROM budget_entries
              WHERE budget_id = ? AND kind = 'expense'
                AND YEAR(FROM_UNIXTIME(entry_date / 1000)) = ?
                AND MONTH(FROM_UNIXTIME(entry_date / 1000)) = ?
@@ -309,7 +313,8 @@ impl BudgetRepository {
         .bind(month)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.0.unwrap_or(0))
+        let val: String = sqlx::Row::get(&row, 0);
+        Ok(val.parse::<i64>().unwrap_or(0))
     }
 
     // -----------------------------------------------------------------------
