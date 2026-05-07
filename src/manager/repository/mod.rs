@@ -279,10 +279,12 @@ impl BudgetRepository {
     }
 
     pub async fn get_envelope_limit(&self, budget_id: &str) -> Result<Option<i64>> {
-        let row = sqlx::query("SELECT CAST(monthly_limit AS CHAR) FROM budget_envelope_limits WHERE budget_id = ?")
-            .bind(budget_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT CAST(CAST(monthly_limit AS CHAR) AS UNSIGNED) FROM budget_envelope_limits WHERE budget_id = ?"
+        )
+        .bind(budget_id)
+        .fetch_optional(&self.pool)
+        .await?;
         match row {
             Some(r) => {
                 let val: String = sqlx::Row::get(&r, 0);
@@ -297,8 +299,8 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string().parse::<i32>().unwrap_or(2026);
         let month = now.format("%m").to_string().parse::<i32>().unwrap_or(1);
-        let row: (Option<i64>,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(amount), 0) FROM budget_entries
+        let row = sqlx::query(
+            "SELECT CAST(COALESCE(SUM(amount), 0) AS CHAR) FROM budget_entries
              WHERE budget_id = ? AND kind = 'expense'
                AND YEAR(FROM_UNIXTIME(entry_date / 1000)) = ?
                AND MONTH(FROM_UNIXTIME(entry_date / 1000)) = ?
@@ -309,7 +311,8 @@ impl BudgetRepository {
         .bind(month)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row.0.unwrap_or(0))
+        let val: String = sqlx::Row::get(&row, 0);
+        Ok(val.parse::<i64>().unwrap_or(0))
     }
 
     // -----------------------------------------------------------------------
