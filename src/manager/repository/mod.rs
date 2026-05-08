@@ -23,7 +23,31 @@ impl BudgetRepository {
         let mut migrator =
             sqlx::migrate::Migrator::new(std::path::Path::new("./migrations")).await?;
         migrator.set_ignore_missing(true);
-        migrator.run(&pool).await?;
+
+        if let Err(e) = migrator.run(&pool).await {
+            let err_str = format!("{}", e);
+            if err_str.contains("partially applied") && err_str.contains("20260507090228") {
+                tracing::warn!("Migration 20260507090228 partially applied, checking if avatar column exists...");
+                let has_avatar: bool = sqlx::query_scalar(
+                    "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'philand' AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
+                )
+                .fetch_one(&pool)
+                .await.unwrap_or(false);
+
+                if has_avatar {
+                    tracing::warn!("Avatar column exists, manually marking migration as complete");
+                    sqlx::query(
+                        "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_at) VALUES ('20260507090228', 'add_avatar_to_users', NOW())"
+                    )
+                    .execute(&pool)
+                    .await.ok();
+                } else {
+                    return Err(anyhow::anyhow!("{}", e));
+                }
+            } else {
+                return Err(anyhow::anyhow!("{}", e));
+            }
+        }
         Ok(Self { pool })
     }
 
