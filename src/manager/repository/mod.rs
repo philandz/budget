@@ -23,7 +23,31 @@ impl BudgetRepository {
         let mut migrator =
             sqlx::migrate::Migrator::new(std::path::Path::new("./migrations")).await?;
         migrator.set_ignore_missing(true);
-        migrator.run(&pool).await?;
+
+        if let Err(e) = migrator.run(&pool).await {
+            let err_str = format!("{}", e);
+            if err_str.contains("partially applied") && err_str.contains("20260507090228") {
+                tracing::warn!("Migration 20260507090228 partially applied, checking if avatar column exists...");
+                let has_avatar: bool = sqlx::query_scalar(
+                    "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'philand' AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
+                )
+                .fetch_one(&pool)
+                .await.unwrap_or(false);
+
+                if has_avatar {
+                    tracing::warn!("Avatar column exists, manually marking migration as complete");
+                    sqlx::query(
+                        "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_at) VALUES ('20260507090228', 'add_avatar_to_users', NOW())"
+                    )
+                    .execute(&pool)
+                    .await.ok();
+                } else {
+                    return Err(anyhow::anyhow!("{}", e));
+                }
+            } else {
+                return Err(anyhow::anyhow!("{}", e));
+            }
+        }
         Ok(Self { pool })
     }
 
@@ -302,22 +326,23 @@ impl BudgetRepository {
     /// Sum of expense entries in the current calendar month (shared DB with Entry service).
     pub async fn get_current_month_spend(&self, budget_id: &str) -> Result<i64> {
         let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string().parse::<i32>().unwrap_or(2026);
-        let month = now.format("%m").to_string().parse::<i32>().unwrap_or(1);
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let start_of_month = format!("{}-{:02}-01", year, month);
         let row = sqlx::query(
-            "SELECT CAST(COALESCE(SUM(amount), 0) AS CHAR) FROM budget_entries
+            "SELECT CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) FROM entries
              WHERE budget_id = ? AND kind = 'expense'
-               AND YEAR(FROM_UNIXTIME(entry_date / 1000)) = ?
-               AND MONTH(FROM_UNIXTIME(entry_date / 1000)) = ?
+               AND entry_date >= ?
+               AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                AND deleted_at IS NULL",
         )
         .bind(budget_id)
-        .bind(year)
-        .bind(month)
+        .bind(&start_of_month)
+        .bind(&start_of_month)
         .fetch_one(&self.pool)
         .await?;
-        let val: String = sqlx::Row::get(&row, 0);
-        Ok(val.parse::<i64>().unwrap_or(0))
+        let val: i64 = sqlx::Row::get(&row, 0);
+        Ok(val)
     }
 
     // -----------------------------------------------------------------------

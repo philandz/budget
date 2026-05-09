@@ -123,11 +123,24 @@ pub fn map_budget(db: DbBudget) -> Budget {
 }
 
 pub fn map_budget_member(db: DbBudgetMember) -> BudgetMember {
+    // For pending members (invited but not yet registered) the users JOIN
+    // returns NULL for display_name / email because no user row exists yet.
+    // In that case user_id holds the invited email address, so use it as the
+    // fallback for both fields so callers always get something meaningful.
+    let email = db
+        .email
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| db.user_id.clone());
+    let display_name = db
+        .display_name
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| db.user_id.clone());
+
     BudgetMember {
         budget_id: db.budget_id,
         user_id: db.user_id,
-        display_name: db.display_name.unwrap_or_default(),
-        email: db.email.unwrap_or_default(),
+        display_name,
+        email,
         role: budget_role_from_db(&db.role) as i32,
         avatar: db.avatar.unwrap_or_default(),
     }
