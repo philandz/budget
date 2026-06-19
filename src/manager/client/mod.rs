@@ -2,8 +2,9 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 use crate::pb::service::identity::identity_service_client::IdentityServiceClient;
-use crate::pb::service::identity::GetOrgRoleRequest;
+use crate::pb::service::identity::{GetOrgRoleRequest, GetProfileRequest};
 use crate::pb::shared::organization::OrgRole;
+use crate::pb::shared::user::UserType;
 
 pub struct IdentityClient {
     inner: IdentityServiceClient<Channel>,
@@ -29,5 +30,21 @@ impl IdentityClient {
             }))
             .await?;
         Ok(OrgRole::try_from(resp.into_inner().role).unwrap_or(OrgRole::OrNone))
+    }
+
+    pub async fn is_super_admin(&mut self, _user_id: &str) -> Result<bool, Status> {
+        let resp = self
+            .inner
+            .get_profile(tonic::Request::new(GetProfileRequest {}))
+            .await?;
+        let user = resp.into_inner().user;
+        let is_admin = user
+            .map(|u| u.user_type == UserType::UtSuperAdmin as i32)
+            .unwrap_or(false);
+        Ok(is_admin)
+    }
+
+    pub fn is_super_admin_from_type(user_type: Option<&str>) -> bool {
+        user_type == Some("super_admin")
     }
 }
