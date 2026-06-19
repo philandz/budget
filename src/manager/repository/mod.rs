@@ -26,24 +26,40 @@ impl BudgetRepository {
 
         if let Err(e) = migrator.run(&pool).await {
             let err_str = format!("{}", e);
-            if err_str.contains("partially applied") && err_str.contains("20260507090228") {
-                tracing::warn!("Migration 20260507090228 partially applied, checking if avatar column exists...");
-                let has_avatar: bool = sqlx::query_scalar(
-                    "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'philand' AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
-                )
-                .fetch_one(&pool)
-                .await.unwrap_or(false);
-
-                if has_avatar {
-                    tracing::warn!("Avatar column exists, manually marking migration as complete");
-                    sqlx::query(
-                        "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_at) VALUES ('20260507090228', 'add_avatar_to_users', NOW())"
+            if err_str.contains("partially applied") {
+                tracing::warn!("Partial migration detected: {}", e);
+                if err_str.contains("20260527065921") {
+                    let has_cat_type: bool = sqlx::query_scalar(
+                        "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'cat_type'"
                     )
+                    .fetch_one(&pool)
+                    .await.unwrap_or(false);
+                    if has_cat_type {
+                        tracing::warn!("cat_type column exists, marking migration as complete");
+                        sqlx::query(
+                            "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time) VALUES (20260527065921, 'add cat_type column', NOW(), true, 0x00, 0)"
+                        )
+                        .execute(&pool)
+                        .await.ok();
+                    }
+                }
+                if err_str.contains("20260507090228") {
+                    let has_avatar: bool = sqlx::query_scalar(
+                        "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
+                    )
+                    .fetch_one(&pool)
+                    .await.unwrap_or(false);
+                    if has_avatar {
+                        sqlx::query(
+                            "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time) VALUES (20260507090228, 'add_avatar_to_users', NOW(), true, 0x00, 0)"
+                        )
+                        .execute(&pool)
+                        .await.ok();
+                    }
+                }
+                sqlx::query("DELETE FROM _sqlx_migrations WHERE success = false")
                     .execute(&pool)
                     .await.ok();
-                } else {
-                    return Err(anyhow::anyhow!("{}", e));
-                }
             } else {
                 return Err(anyhow::anyhow!("{}", e));
             }
@@ -94,15 +110,79 @@ impl BudgetRepository {
     }
 
     pub async fn get_budget_for_user(&self, budget_id: &str, user_id: &str) -> Result<DbBudget> {
+        let now = chrono::Utc::now();
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let start_of_month = format!("{}-{:02}-01", year, month);
+
         let row = sqlx::query_as::<_, DbBudget>(
-            "SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
+            r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                     b.created_by, b.created_at, b.updated_at, b.deleted_at,
-                    bm.role AS my_role
-             FROM budgets b
-             LEFT JOIN budget_members bm ON bm.budget_id = b.id AND bm.user_id = ?
-             WHERE b.id = ? AND b.deleted_at IS NULL",
+                    bm.role AS my_role,
+                    el.monthly_limit AS envelope_limit,
+                    COALESCE(mc.member_count, 0) AS member_count,
+                    COALESCE(cs.current_spend, 0) AS current_spend
+               FROM budgets b
+               LEFT JOIN budget_members bm ON bm.budget_id = b.id AND bm.user_id = ?
+               LEFT JOIN budget_envelope_limits el ON el.budget_id = b.id
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   FROM budget_members
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) mc ON mc.budget_id = b.id
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   FROM entries
+                   WHERE kind = 'expense'
+                     AND entry_date >= ?
+                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
+                     AND deleted_at IS NULL
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) cs ON cs.budget_id = b.id
+               WHERE b.id = ? AND b.deleted_at IS NULL"#,
         )
         .bind(user_id)
+        .bind(&start_of_month)
+        .bind(&start_of_month)
+        .bind(budget_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_budget_by_id(&self, budget_id: &str) -> Result<DbBudget> {
+        let now = chrono::Utc::now();
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let start_of_month = format!("{}-{:02}-01", year, month);
+
+        let row = sqlx::query_as::<_, DbBudget>(
+            r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
+                    b.created_by, b.created_at, b.updated_at, b.deleted_at,
+                    '' AS my_role,
+                    el.monthly_limit AS envelope_limit,
+                    COALESCE(mc.member_count, 0) AS member_count,
+                    COALESCE(cs.current_spend, 0) AS current_spend
+               FROM budgets b
+               LEFT JOIN budget_envelope_limits el ON el.budget_id = b.id
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   FROM budget_members
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) mc ON mc.budget_id = b.id
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   FROM entries
+                   WHERE kind = 'expense'
+                     AND entry_date >= ?
+                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
+                     AND deleted_at IS NULL
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) cs ON cs.budget_id = b.id
+               WHERE b.id = ? AND b.deleted_at IS NULL"#,
+        )
+        .bind(&start_of_month)
+        .bind(&start_of_month)
         .bind(budget_id)
         .fetch_one(&self.pool)
         .await?;
@@ -145,20 +225,129 @@ impl BudgetRepository {
         org_id: &str,
         user_id: &str,
     ) -> Result<Vec<DbBudget>> {
-        let rows = sqlx::query_as::<_, DbBudget>(
-            "SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
-                    b.created_by, b.created_at, b.updated_at, b.deleted_at,
-                    bm.role AS my_role
-             FROM budgets b
-             INNER JOIN budget_members bm ON bm.budget_id = b.id AND bm.user_id = ?
-             WHERE b.org_id = ? AND b.deleted_at IS NULL
-             ORDER BY b.created_at ASC",
+        let now = chrono::Utc::now();
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let start_of_month = format!("{}-{:02}-01", year, month);
+
+let rows = sqlx::query_as::<_, DbBudget>(
+            r#"SELECT
+                  b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
+                  b.created_by, b.created_at, b.updated_at, b.deleted_at,
+                  bm.role AS my_role,
+                  el.monthly_limit AS envelope_limit,
+                  COALESCE(mc.member_count, 0) AS member_count,
+                  COALESCE(cs.current_spend, 0) AS current_spend
+               FROM budgets b
+               INNER JOIN budget_members bm ON bm.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci AND bm.user_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
+               LEFT JOIN budget_envelope_limits el ON el.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   FROM budget_members
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) mc ON mc.budget_id = b.id COLLATE utf8mb4_unicode_ci
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   FROM entries
+                   WHERE kind = 'expense'
+                     AND entry_date >= ?
+                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
+                     AND deleted_at IS NULL
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) cs ON cs.budget_id = b.id COLLATE utf8mb4_unicode_ci
+               WHERE b.org_id = ? AND b.deleted_at IS NULL
+               ORDER BY b.created_at ASC"#,
         )
         .bind(user_id)
+        .bind(&start_of_month)
+        .bind(&start_of_month)
         .bind(org_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    pub async fn list_budgets_admin(
+        &self,
+        org_id: &str,
+        budget_type: &str,
+        name_search: &str,
+        page: i32,
+        page_size: i32,
+    ) -> Result<(Vec<DbBudget>, i32)> {
+        let now = chrono::Utc::now();
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let start_of_month = format!("{}-{:02}-01", year, month);
+
+        let offset = (page - 1) * page_size;
+
+        let base_where = if org_id.is_empty() {
+            String::new()
+        } else {
+            format!(" AND b.org_id = '{}'", org_id)
+        };
+
+        let type_filter = if budget_type.is_empty() {
+            String::new()
+        } else {
+            format!(" AND b.budget_type = '{}'", budget_type)
+        };
+
+        let search_filter = if name_search.is_empty() {
+            String::new()
+        } else {
+            format!(" AND b.name LIKE '%{}%'", name_search)
+        };
+
+        let count_query = format!(
+            "SELECT COUNT(*) FROM budgets b WHERE b.deleted_at IS NULL{}{}{}",
+            base_where, type_filter, search_filter
+        );
+        let total: i32 = sqlx::query_scalar(&count_query)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let query = format!(
+            r#"SELECT
+                  b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
+                  b.created_by, b.created_at, b.updated_at, b.deleted_at,
+                  bm.role AS my_role,
+                  el.monthly_limit AS envelope_limit,
+                  COALESCE(mc.member_count, 0) AS member_count,
+                  COALESCE(cs.current_spend, 0) AS current_spend
+               FROM budgets b
+               LEFT JOIN budget_members bm ON bm.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci AND bm.user_id = ''
+               LEFT JOIN budget_envelope_limits el ON el.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   FROM budget_members
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) mc ON mc.budget_id = b.id COLLATE utf8mb4_unicode_ci
+               LEFT JOIN (
+                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   FROM entries
+                   WHERE kind = 'expense'
+                     AND entry_date >= ?
+                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
+                     AND deleted_at IS NULL
+                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+               ) cs ON cs.budget_id = b.id COLLATE utf8mb4_unicode_ci
+               WHERE b.deleted_at IS NULL{}{}{}
+               ORDER BY b.created_at DESC
+               LIMIT ? OFFSET ?"#,
+            base_where, type_filter, search_filter
+        );
+
+        let rows = sqlx::query_as::<_, DbBudget>(&query)
+            .bind(&start_of_month)
+            .bind(&start_of_month)
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok((rows, total))
     }
 
     // -----------------------------------------------------------------------
