@@ -56,8 +56,13 @@ impl BudgetBiz {
         Ok(map_budget(db))
     }
 
-    pub async fn get_budget(&self, user_id: &str, budget_id: &str) -> Result<Budget, Status> {
-        self.assert_member(budget_id, user_id).await?;
+    pub async fn get_budget(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<Budget, Status> {
+        self.assert_member(budget_id, user_id, user_type).await?;
         let db = self
             .repo
             .get_budget_for_user(budget_id, user_id)
@@ -66,14 +71,33 @@ impl BudgetBiz {
         Ok(map_budget(db))
     }
 
+    pub async fn get_budget_admin(&self, budget_id: &str) -> Result<Budget, Status> {
+        let db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        Ok(map_budget(db))
+    }
+
+    pub async fn list_members_admin(&self, budget_id: &str) -> Result<Vec<BudgetMember>, Status> {
+        let rows = self
+            .repo
+            .list_members(budget_id)
+            .await
+            .map_err(Self::internal)?;
+        Ok(rows.into_iter().map(map_budget_member).collect())
+    }
+
     pub async fn update_budget(
         &self,
         user_id: &str,
         budget_id: &str,
         name: &str,
         budget_type: BudgetType,
+        user_type: Option<&str>,
     ) -> Result<Budget, Status> {
-        self.assert_min_role(budget_id, user_id, BudgetRole::Manager)
+        self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         let db = self
             .repo
@@ -83,8 +107,13 @@ impl BudgetBiz {
         Ok(map_budget(db))
     }
 
-    pub async fn delete_budget(&self, user_id: &str, budget_id: &str) -> Result<(), Status> {
-        self.assert_min_role(budget_id, user_id, BudgetRole::Owner)
+    pub async fn delete_budget(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<(), Status> {
+        self.assert_min_role(budget_id, user_id, BudgetRole::Owner, user_type)
             .await?;
         self.repo
             .delete_budget(budget_id)
@@ -101,15 +130,55 @@ impl BudgetBiz {
         Ok(rows.into_iter().map(map_budget).collect())
     }
 
+    pub async fn list_budgets_admin(
+        &self,
+        caller_id: &str,
+        org_id: &str,
+        budget_type: &str,
+        name_search: &str,
+        page: i32,
+        page_size: i32,
+    ) -> Result<(Vec<Budget>, i32), Status> {
+        // Gateway has already verified super_admin via identity GetProfile.
+        // We trust the x-user-id header from gateway.
+        let _ = caller_id; // unused, gateway already verified
+
+        let (rows, total) = self
+            .repo
+            .list_budgets_admin(org_id, budget_type, name_search, page, page_size)
+            .await
+            .map_err(Self::internal)?;
+        Ok((rows.into_iter().map(map_budget).collect(), total))
+    }
+
     // -----------------------------------------------------------------------
     // Role authority (internal — called by Entry, Category, Sharing services)
     // -----------------------------------------------------------------------
 
-    /// 3-step fallback:
+    /// 4-step fallback:
+    /// 0. Super admin → full access (Owner).
     /// 1. Explicit budget_members row → use it directly.
     /// 2. is_private gate → if private and no explicit row, deny (Unspecified).
     /// 3. Org-role fallback → OrOwner → BudgetOwner, OrAdmin → BudgetManager, else Unspecified.
-    async fn resolve_role(&self, budget_id: &str, user_id: &str) -> Result<BudgetRole, Status> {
+    async fn resolve_role(
+        &self,
+        budget_id: &str,
+        user_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<BudgetRole, Status> {
+        // Step 0: super admin bypass - check user_type header first (set by gateway)
+        if user_type == Some("super_admin") {
+            return Ok(BudgetRole::Owner);
+        }
+
+        // Fallback to identity service check if user_type not provided
+        {
+            let mut client = self.identity_client.lock().await;
+            if client.is_super_admin(user_id).await.unwrap_or(false) {
+                return Ok(BudgetRole::Owner);
+            }
+        }
+
         // Step 1: explicit budget_members row
         if let Some(role) = self
             .repo
@@ -153,8 +222,9 @@ impl BudgetBiz {
         &self,
         user_id: &str,
         budget_id: &str,
+        user_type: Option<&str>,
     ) -> Result<(BudgetRole, bool), Status> {
-        let role = self.resolve_role(budget_id, user_id).await?;
+        let role = self.resolve_role(budget_id, user_id, user_type).await?;
         let is_member = role != BudgetRole::Unspecified;
         Ok((role, is_member))
     }
@@ -169,9 +239,13 @@ impl BudgetBiz {
         budget_id: &str,
         user_id: &str,
         role: BudgetRole,
+        user_type: Option<&str>,
+        system_actor: bool,
     ) -> Result<BudgetMember, Status> {
-        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager)
-            .await?;
+        if !system_actor {
+            self.assert_min_role(budget_id, caller_id, BudgetRole::Manager, user_type)
+                .await?;
+        }
         if role == BudgetRole::Owner {
             return Err(Status::invalid_argument(
                 "Cannot directly assign Owner role; use transfer ownership",
@@ -191,8 +265,9 @@ impl BudgetBiz {
         budget_id: &str,
         user_id: &str,
         role: BudgetRole,
+        user_type: Option<&str>,
     ) -> Result<BudgetMember, Status> {
-        self.assert_min_role(budget_id, caller_id, BudgetRole::Owner)
+        self.assert_min_role(budget_id, caller_id, BudgetRole::Owner, user_type)
             .await?;
         if role == BudgetRole::Owner {
             return Err(Status::invalid_argument(
@@ -212,8 +287,9 @@ impl BudgetBiz {
         caller_id: &str,
         budget_id: &str,
         user_id: &str,
+        user_type: Option<&str>,
     ) -> Result<(), Status> {
-        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager)
+        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager, user_type)
             .await?;
         let target_role = self
             .repo
@@ -233,8 +309,9 @@ impl BudgetBiz {
         &self,
         caller_id: &str,
         budget_id: &str,
+        user_type: Option<&str>,
     ) -> Result<Vec<BudgetMember>, Status> {
-        self.assert_member(budget_id, caller_id).await?;
+        self.assert_member(budget_id, caller_id, user_type).await?;
         let rows = self
             .repo
             .list_members(budget_id)
@@ -252,8 +329,9 @@ impl BudgetBiz {
         caller_id: &str,
         budget_id: &str,
         monthly_limit: i64,
+        user_type: Option<&str>,
     ) -> Result<EnvelopeLimit, Status> {
-        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager)
+        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager, user_type)
             .await?;
         self.repo
             .set_envelope_limit(budget_id, monthly_limit)
@@ -266,8 +344,9 @@ impl BudgetBiz {
         &self,
         caller_id: &str,
         budget_id: &str,
+        user_type: Option<&str>,
     ) -> Result<EnvelopeLimit, Status> {
-        self.assert_member(budget_id, caller_id).await?;
+        self.assert_member(budget_id, caller_id, user_type).await?;
         let limit = self
             .repo
             .get_envelope_limit(budget_id)
@@ -320,8 +399,9 @@ impl BudgetBiz {
         caller_id: &str,
         budget_id: &str,
         policy: RolloverPolicy,
+        user_type: Option<&str>,
     ) -> Result<RolloverPolicy, Status> {
-        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager)
+        self.assert_min_role(budget_id, caller_id, BudgetRole::Manager, user_type)
             .await?;
         self.repo
             .set_rollover_policy(budget_id, policy)
@@ -334,8 +414,9 @@ impl BudgetBiz {
         &self,
         caller_id: &str,
         budget_id: &str,
+        user_type: Option<&str>,
     ) -> Result<RolloverPolicy, Status> {
-        self.assert_member(budget_id, caller_id).await?;
+        self.assert_member(budget_id, caller_id, user_type).await?;
         self.repo
             .get_rollover_policy(budget_id)
             .await
@@ -363,8 +444,13 @@ impl BudgetBiz {
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    async fn assert_member(&self, budget_id: &str, user_id: &str) -> Result<(), Status> {
-        let role = self.resolve_role(budget_id, user_id).await?;
+    async fn assert_member(
+        &self,
+        budget_id: &str,
+        user_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<(), Status> {
+        let role = self.resolve_role(budget_id, user_id, user_type).await?;
         if role == BudgetRole::Unspecified {
             return Err(Status::permission_denied("Not a member of this budget"));
         }
@@ -376,8 +462,9 @@ impl BudgetBiz {
         budget_id: &str,
         user_id: &str,
         min_role: BudgetRole,
+        user_type: Option<&str>,
     ) -> Result<(), Status> {
-        let role = self.resolve_role(budget_id, user_id).await?;
+        let role = self.resolve_role(budget_id, user_id, user_type).await?;
 
         let ok = match min_role {
             BudgetRole::Viewer => role != BudgetRole::Unspecified,
@@ -407,8 +494,9 @@ impl BudgetBiz {
         &self,
         user_id: &str,
         req: &crate::pb::service::budget::CreateInvestAssetRequest,
+        user_type: Option<&str>,
     ) -> Result<crate::pb::service::budget::InvestAsset, Status> {
-        self.assert_min_role(&req.budget_id, user_id, BudgetRole::Manager)
+        self.assert_min_role(&req.budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         let asset_type = crate::pb::service::budget::AssetType::try_from(req.asset_type)
             .unwrap_or(crate::pb::service::budget::AssetType::SavingsDeposit);
@@ -448,13 +536,14 @@ impl BudgetBiz {
         user_id: &str,
         asset_id: &str,
         req: &crate::pb::service::budget::UpdateInvestAssetRequest,
+        user_type: Option<&str>,
     ) -> Result<crate::pb::service::budget::InvestAsset, Status> {
         let db_existing = self
             .repo
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_min_role(&db_existing.budget_id, user_id, BudgetRole::Manager)
+        self.assert_min_role(&db_existing.budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         let db = self
             .repo
@@ -478,13 +567,18 @@ impl BudgetBiz {
         ))
     }
 
-    pub async fn delete_invest_asset(&self, user_id: &str, asset_id: &str) -> Result<(), Status> {
+    pub async fn delete_invest_asset(
+        &self,
+        user_id: &str,
+        asset_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<(), Status> {
         let db = self
             .repo
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_min_role(&db.budget_id, user_id, BudgetRole::Manager)
+        self.assert_min_role(&db.budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.repo
             .delete_invest_asset(asset_id)
@@ -496,8 +590,9 @@ impl BudgetBiz {
         &self,
         user_id: &str,
         budget_id: &str,
+        user_type: Option<&str>,
     ) -> Result<Vec<crate::pb::service::budget::InvestAsset>, Status> {
-        self.assert_member(budget_id, user_id).await?;
+        self.assert_member(budget_id, user_id, user_type).await?;
         let rows = self
             .repo
             .list_invest_assets(budget_id)
@@ -517,8 +612,9 @@ impl BudgetBiz {
         &self,
         user_id: &str,
         budget_id: &str,
+        user_type: Option<&str>,
     ) -> Result<crate::pb::service::budget::InvestPortfolioSummary, Status> {
-        self.assert_member(budget_id, user_id).await?;
+        self.assert_member(budget_id, user_id, user_type).await?;
         let rows = self
             .repo
             .list_invest_assets(budget_id)
@@ -557,13 +653,14 @@ impl BudgetBiz {
         asset_id: &str,
         price: i64,
         snapshot_date: &str,
+        user_type: Option<&str>,
     ) -> Result<crate::pb::service::budget::PriceSnapshot, Status> {
         let db_asset = self
             .repo
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_member(&db_asset.budget_id, user_id).await?;
+        self.assert_member(&db_asset.budget_id, user_id, user_type).await?;
         let date = if snapshot_date.is_empty() {
             chrono::Utc::now().format("%Y-%m-%d").to_string()
         } else {
@@ -581,13 +678,14 @@ impl BudgetBiz {
         &self,
         user_id: &str,
         asset_id: &str,
+        user_type: Option<&str>,
     ) -> Result<crate::pb::service::budget::PriceSnapshot, Status> {
         let db_asset = self
             .repo
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_member(&db_asset.budget_id, user_id).await?;
+        self.assert_member(&db_asset.budget_id, user_id, user_type).await?;
         let db = self
             .repo
             .get_latest_price_snapshot(asset_id)
@@ -602,13 +700,14 @@ impl BudgetBiz {
         user_id: &str,
         asset_id: &str,
         limit: i32,
+        user_type: Option<&str>,
     ) -> Result<Vec<crate::pb::service::budget::PriceSnapshot>, Status> {
         let db_asset = self
             .repo
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_member(&db_asset.budget_id, user_id).await?;
+        self.assert_member(&db_asset.budget_id, user_id, user_type).await?;
         let rows = self
             .repo
             .list_price_snapshots(asset_id, limit.clamp(1, 365))
