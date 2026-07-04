@@ -2,9 +2,8 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 use crate::pb::service::identity::identity_service_client::IdentityServiceClient;
-use crate::pb::service::identity::{GetOrgRoleRequest, GetProfileRequest, ListOrgMembersRequest};
+use crate::pb::service::identity::{GetOrgRoleRequest, ListOrgMembersRequest};
 use crate::pb::shared::organization::OrgRole;
-use crate::pb::shared::user::UserType;
 
 /// OrgMemberView enriched from identity service. We re-fetch per-budget
 /// because the budget DB is on a different MySQL host than identity's
@@ -43,18 +42,6 @@ impl IdentityClient {
         Ok(OrgRole::try_from(resp.into_inner().role).unwrap_or(OrgRole::OrNone))
     }
 
-    pub async fn is_super_admin(&mut self, _user_id: &str) -> Result<bool, Status> {
-        let resp = self
-            .inner
-            .get_profile(tonic::Request::new(GetProfileRequest {}))
-            .await?;
-        let user = resp.into_inner().user;
-        let is_admin = user
-            .map(|u| u.user_type == UserType::UtSuperAdmin as i32)
-            .unwrap_or(false);
-        Ok(is_admin)
-    }
-
     pub fn is_super_admin_from_type(user_type: Option<&str>) -> bool {
         user_type == Some("super_admin")
     }
@@ -80,6 +67,7 @@ impl IdentityClient {
         &mut self,
         bearer: &str,
         org_id: &str,
+        service_actor: bool,
     ) -> Result<Vec<OrgUserInfo>, Status> {
         let mut req = tonic::Request::new(ListOrgMembersRequest {
             org_id: org_id.to_string(),
@@ -90,6 +78,11 @@ impl IdentityClient {
         let value = tonic::metadata::MetadataValue::try_from(bearer)
             .map_err(|_| Status::unauthenticated("invalid bearer"))?;
         req.metadata_mut().insert("authorization", value);
+        if service_actor {
+            let v = tonic::metadata::MetadataValue::try_from("true")
+                .map_err(|_| Status::internal("invalid metadata value"))?;
+            req.metadata_mut().insert("x-service-actor", v);
+        }
 
         let resp = self.inner.list_org_members(req).await?.into_inner();
         Ok(resp

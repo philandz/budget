@@ -128,7 +128,8 @@ impl BudgetBiz {
             .map_err(Self::internal)?;
         let org_users = {
             let mut identity = self.identity_client.lock().await;
-            match identity.list_org_users(bearer, &budget.org_id).await {
+            // Admin path: always use service_actor since gateway already verified super_admin
+            match identity.list_org_users(bearer, &budget.org_id, true).await {
                 Ok(u) => u,
                 Err(e) => {
                     tracing::warn!(
@@ -239,14 +240,6 @@ impl BudgetBiz {
         // Step 0: super admin bypass - check user_type header first (set by gateway)
         if user_type == Some("super_admin") {
             return Ok(BudgetRole::Owner);
-        }
-
-        // Fallback to identity service check if user_type not provided
-        {
-            let mut client = self.identity_client.lock().await;
-            if client.is_super_admin(user_id).await.unwrap_or(false) {
-                return Ok(BudgetRole::Owner);
-            }
         }
 
         // Step 1: explicit budget_members row
@@ -398,7 +391,11 @@ impl BudgetBiz {
 
         let org_users = {
             let mut identity = self.identity_client.lock().await;
-            match identity.list_org_users(bearer, &budget.org_id).await {
+            let caller_is_super_admin = user_type == Some("super_admin");
+            match identity
+                .list_org_users(bearer, &budget.org_id, caller_is_super_admin)
+                .await
+            {
                 Ok(u) => u,
                 Err(e) => {
                     tracing::warn!(
