@@ -7,18 +7,19 @@ use crate::pb::service::budget::{
     budget_service_server::BudgetService, AddBudgetMemberRequest, AddBudgetMemberResponse,
     AddPriceSnapshotRequest, BudgetRole, BudgetType, CheckRoleRequest, CheckRoleResponse,
     CreateBudgetRequest, CreateBudgetResponse, CreateInvestAssetRequest, DeleteBudgetRequest,
-    DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse, GetBudgetAdminRequest,
-    GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse, GetBurnRateRequest,
-    GetBurnRateResponse, GetInvestPortfolioSummaryRequest, GetLatestPriceSnapshotRequest,
-    GetRolloverPolicyRequest, GetRolloverPolicyResponse, InvestAsset, InvestPortfolioSummary,
-    ListBudgetMembersAdminRequest, ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse, ListBudgetsAdminRequest,
-    ListBudgetsAdminResponse, ListBudgetsRequest, ListBudgetsResponse, ListInvestAssetsRequest,
-    ListInvestAssetsResponse, ListPriceSnapshotsRequest, ListPriceSnapshotsResponse,
-    ListTemplatesRequest, ListTemplatesResponse, PriceSnapshot, RemoveBudgetMemberRequest,
-    RemoveBudgetMemberResponse, SetEnvelopeLimitRequest, SetEnvelopeLimitResponse,
-    SetRolloverPolicyRequest, SetRolloverPolicyResponse, UpdateBudgetMemberRoleRequest,
-    UpdateBudgetMemberRoleResponse, UpdateBudgetRequest, UpdateBudgetResponse,
-    UpdateInvestAssetRequest,
+    DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse,
+    GetBudgetAdminRequest, GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse,
+    GetBurnRateRequest, GetBurnRateResponse, GetInvestPortfolioSummaryRequest,
+    GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest, GetRolloverPolicyResponse,
+    InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
+    ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse,
+    ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest, ListBudgetsResponse,
+    ListInvestAssetsRequest, ListInvestAssetsResponse, ListPriceSnapshotsRequest,
+    ListPriceSnapshotsResponse, ListTemplatesRequest, ListTemplatesResponse, PriceSnapshot,
+    RemoveBudgetMemberRequest, RemoveBudgetMemberResponse, SetEnvelopeLimitRequest,
+    SetEnvelopeLimitResponse, SetRolloverPolicyRequest, SetRolloverPolicyResponse,
+    UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse, UpdateBudgetRequest,
+    UpdateBudgetResponse, UpdateInvestAssetRequest,
 };
 
 pub struct BudgetHandler {
@@ -67,7 +68,10 @@ impl BudgetService for BudgetHandler {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
-        let budget = self.biz.get_budget(&user_id, &req.budget_id, user_type.as_deref()).await?;
+        let budget = self
+            .biz
+            .get_budget(&user_id, &req.budget_id, user_type.as_deref())
+            .await?;
         Ok(Response::new(GetBudgetResponse {
             budget: Some(budget),
         }))
@@ -88,8 +92,14 @@ impl BudgetService for BudgetHandler {
         &self,
         request: Request<ListBudgetMembersAdminRequest>,
     ) -> Result<Response<ListBudgetMembersAdminResponse>, Status> {
+        let bearer = request
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or_else(|| tonic::Status::unauthenticated("Missing bearer token"))?;
         let req = request.into_inner();
-        let members = self.biz.list_members_admin(&req.budget_id).await?;
+        let members = self.biz.list_members_admin(&req.budget_id, &bearer).await?;
         Ok(Response::new(ListBudgetMembersAdminResponse { members }))
     }
 
@@ -104,7 +114,13 @@ impl BudgetService for BudgetHandler {
         let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Standard);
         let budget = self
             .biz
-            .update_budget(&user_id, &req.budget_id, &req.name, budget_type, user_type.as_deref())
+            .update_budget(
+                &user_id,
+                &req.budget_id,
+                &req.name,
+                budget_type,
+                user_type.as_deref(),
+            )
             .await?;
         Ok(Response::new(UpdateBudgetResponse {
             budget: Some(budget),
@@ -118,7 +134,9 @@ impl BudgetService for BudgetHandler {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
-        self.biz.delete_budget(&user_id, &req.budget_id, user_type.as_deref()).await?;
+        self.biz
+            .delete_budget(&user_id, &req.budget_id, user_type.as_deref())
+            .await?;
         Ok(Response::new(DeleteBudgetResponse { success: true }))
     }
 
@@ -140,7 +158,14 @@ impl BudgetService for BudgetHandler {
         let req = request.into_inner();
         let (budgets, total) = self
             .biz
-            .list_budgets_admin(&caller_id, &req.org_id, &req.budget_type, &req.name_search, req.page, req.page_size)
+            .list_budgets_admin(
+                &caller_id,
+                &req.org_id,
+                &req.budget_type,
+                &req.name_search,
+                req.page,
+                req.page_size,
+            )
             .await?;
         Ok(Response::new(ListBudgetsAdminResponse { budgets, total }))
     }
@@ -152,7 +177,10 @@ impl BudgetService for BudgetHandler {
         let _caller_id = validate::user_id_from_metadata(request.metadata())?;
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
-        let (role, is_member) = self.biz.check_role(&req.user_id, &req.budget_id, user_type.as_deref()).await?;
+        let (role, is_member) = self
+            .biz
+            .check_role(&req.user_id, &req.budget_id, user_type.as_deref())
+            .await?;
         Ok(Response::new(CheckRoleResponse {
             role: role as i32,
             is_member,
@@ -160,7 +188,7 @@ impl BudgetService for BudgetHandler {
     }
 
     async fn add_budget_member(
-       &self,
+        &self,
         request: Request<AddBudgetMemberRequest>,
     ) -> Result<Response<AddBudgetMemberResponse>, Status> {
         let caller_id = validate::user_id_from_metadata(request.metadata())?;
@@ -175,7 +203,14 @@ impl BudgetService for BudgetHandler {
         let role = BudgetRole::try_from(req.role).unwrap_or(BudgetRole::Viewer);
         let member = self
             .biz
-            .add_member(&caller_id, &req.budget_id, &req.user_id, role, user_type.as_deref(), system_actor)
+            .add_member(
+                &caller_id,
+                &req.budget_id,
+                &req.user_id,
+                role,
+                user_type.as_deref(),
+                system_actor,
+            )
             .await?;
         Ok(Response::new(AddBudgetMemberResponse {
             member: Some(member),
@@ -192,7 +227,13 @@ impl BudgetService for BudgetHandler {
         let role = BudgetRole::try_from(req.role).unwrap_or(BudgetRole::Viewer);
         let member = self
             .biz
-            .update_member_role(&caller_id, &req.budget_id, &req.user_id, role, user_type.as_deref())
+            .update_member_role(
+                &caller_id,
+                &req.budget_id,
+                &req.user_id,
+                role,
+                user_type.as_deref(),
+            )
             .await?;
         Ok(Response::new(UpdateBudgetMemberRoleResponse {
             member: Some(member),
@@ -207,7 +248,12 @@ impl BudgetService for BudgetHandler {
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
         self.biz
-            .remove_member(&caller_id, &req.budget_id, &req.user_id, user_type.as_deref())
+            .remove_member(
+                &caller_id,
+                &req.budget_id,
+                &req.user_id,
+                user_type.as_deref(),
+            )
             .await?;
         Ok(Response::new(RemoveBudgetMemberResponse { success: true }))
     }
@@ -218,8 +264,17 @@ impl BudgetService for BudgetHandler {
     ) -> Result<Response<ListBudgetMembersResponse>, Status> {
         let caller_id = validate::user_id_from_metadata(request.metadata())?;
         let user_type = validate::user_type_from_metadata(request.metadata());
+        let bearer = request
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or_else(|| tonic::Status::unauthenticated("Missing bearer token"))?;
         let req = request.into_inner();
-        let members = self.biz.list_members(&caller_id, &req.budget_id, user_type.as_deref()).await?;
+        let members = self
+            .biz
+            .list_members(&caller_id, &req.budget_id, user_type.as_deref(), &bearer)
+            .await?;
         Ok(Response::new(ListBudgetMembersResponse { members }))
     }
 
@@ -233,7 +288,12 @@ impl BudgetService for BudgetHandler {
         validate::envelope_limit(req.monthly_limit)?;
         let envelope = self
             .biz
-            .set_envelope_limit(&caller_id, &req.budget_id, req.monthly_limit, user_type.as_deref())
+            .set_envelope_limit(
+                &caller_id,
+                &req.budget_id,
+                req.monthly_limit,
+                user_type.as_deref(),
+            )
             .await?;
         Ok(Response::new(SetEnvelopeLimitResponse {
             envelope: Some(envelope),
@@ -247,7 +307,10 @@ impl BudgetService for BudgetHandler {
         let caller_id = validate::user_id_from_metadata(request.metadata())?;
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
-        let envelope = self.biz.get_burn_rate(&caller_id, &req.budget_id, user_type.as_deref()).await?;
+        let envelope = self
+            .biz
+            .get_burn_rate(&caller_id, &req.budget_id, user_type.as_deref())
+            .await?;
         Ok(Response::new(GetBurnRateResponse {
             envelope: Some(envelope),
         }))
@@ -305,7 +368,10 @@ impl BudgetService for BudgetHandler {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
-        let asset = self.biz.create_invest_asset(&user_id, &req, user_type.as_deref()).await?;
+        let asset = self
+            .biz
+            .create_invest_asset(&user_id, &req, user_type.as_deref())
+            .await?;
         Ok(Response::new(asset))
     }
 
@@ -374,7 +440,13 @@ impl BudgetService for BudgetHandler {
         let req = request.into_inner();
         let snap = self
             .biz
-            .add_price_snapshot(&user_id, &req.asset_id, req.price, &req.snapshot_date, user_type.as_deref())
+            .add_price_snapshot(
+                &user_id,
+                &req.asset_id,
+                req.price,
+                &req.snapshot_date,
+                user_type.as_deref(),
+            )
             .await?;
         Ok(Response::new(snap))
     }

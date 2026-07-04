@@ -4,8 +4,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::Status;
 
-use crate::converters::{map_budget, map_budget_member, DbTemplate};
-use crate::manager::client::IdentityClient;
+use crate::converters::{map_budget, map_budget_member, map_budget_member_with, DbTemplate};
+use crate::manager::client::{self, IdentityClient};
 use crate::manager::repository::BudgetRepository;
 use crate::pb::service::budget::{
     Budget, BudgetMember, BudgetRole, BudgetTemplate, BudgetType, EnvelopeLimit, RolloverPolicy,
@@ -80,13 +80,47 @@ impl BudgetBiz {
         Ok(map_budget(db))
     }
 
-    pub async fn list_members_admin(&self, budget_id: &str) -> Result<Vec<BudgetMember>, Status> {
+    pub async fn list_members_admin(
+        &self,
+        budget_id: &str,
+        bearer: &str,
+    ) -> Result<Vec<BudgetMember>, Status> {
+        let budget = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(Self::internal)?;
+        let org_users = {
+            let mut identity = self.identity_client.lock().await;
+            match identity.list_org_users(bearer, &budget.org_id).await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(
+                        "list_org_users (admin) failed for org {}: {} — falling back to DB-only rows",
+                        budget.org_id,
+                        e
+                    );
+                    Vec::new()
+                }
+            }
+        };
         let rows = self
             .repo
             .list_members(budget_id)
             .await
             .map_err(Self::internal)?;
-        Ok(rows.into_iter().map(map_budget_member).collect())
+        let by_user: std::collections::HashMap<String, client::OrgUserInfo> = org_users
+            .into_iter()
+            .filter(|u| !u.user_id.is_empty())
+            .map(|u| (u.user_id.clone(), u))
+            .collect();
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let enriched = by_user.get(&row.user_id).cloned();
+                map_budget_member_with(row, enriched.as_ref())
+            })
+            .collect())
     }
 
     pub async fn update_budget(
@@ -310,14 +344,56 @@ impl BudgetBiz {
         caller_id: &str,
         budget_id: &str,
         user_type: Option<&str>,
+        bearer: &str,
     ) -> Result<Vec<BudgetMember>, Status> {
         self.assert_member(budget_id, caller_id, user_type).await?;
+
+        // The budget DB sits on a different MySQL host than identity's
+        // `users` table, so the LEFT JOIN in `repo.list_members` returns
+        // NULL `display_name`/`email` for everyone. Override with live
+        // data fetched in one round-trip from identity service via
+        // `list_org_users(org_id)`. Per-member `GetUser` would also
+        // work but requires super-admin permission.
+        let budget = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(Self::internal)?;
+
+        let org_users = {
+            let mut identity = self.identity_client.lock().await;
+            match identity.list_org_users(bearer, &budget.org_id).await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(
+                        "list_org_users failed for org {}: {} — falling back to DB-only rows",
+                        budget.org_id,
+                        e
+                    );
+                    Vec::new()
+                }
+            }
+        };
+
         let rows = self
             .repo
             .list_members(budget_id)
             .await
             .map_err(Self::internal)?;
-        Ok(rows.into_iter().map(map_budget_member).collect())
+
+        let by_user: std::collections::HashMap<String, client::OrgUserInfo> = org_users
+            .into_iter()
+            .filter(|u| !u.user_id.is_empty())
+            .map(|u| (u.user_id.clone(), u))
+            .collect();
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let enriched = by_user.get(&row.user_id).cloned();
+                map_budget_member_with(row, enriched.as_ref())
+            })
+            .collect())
     }
 
     // -----------------------------------------------------------------------
@@ -543,8 +619,13 @@ impl BudgetBiz {
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_min_role(&db_existing.budget_id, user_id, BudgetRole::Manager, user_type)
-            .await?;
+        self.assert_min_role(
+            &db_existing.budget_id,
+            user_id,
+            BudgetRole::Manager,
+            user_type,
+        )
+        .await?;
         let db = self
             .repo
             .update_invest_asset(
@@ -660,7 +741,8 @@ impl BudgetBiz {
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_member(&db_asset.budget_id, user_id, user_type).await?;
+        self.assert_member(&db_asset.budget_id, user_id, user_type)
+            .await?;
         let date = if snapshot_date.is_empty() {
             chrono::Utc::now().format("%Y-%m-%d").to_string()
         } else {
@@ -685,7 +767,8 @@ impl BudgetBiz {
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_member(&db_asset.budget_id, user_id, user_type).await?;
+        self.assert_member(&db_asset.budget_id, user_id, user_type)
+            .await?;
         let db = self
             .repo
             .get_latest_price_snapshot(asset_id)
@@ -707,7 +790,8 @@ impl BudgetBiz {
             .get_invest_asset(asset_id)
             .await
             .map_err(Self::internal)?;
-        self.assert_member(&db_asset.budget_id, user_id, user_type).await?;
+        self.assert_member(&db_asset.budget_id, user_id, user_type)
+            .await?;
         let rows = self
             .repo
             .list_price_snapshots(asset_id, limit.clamp(1, 365))
