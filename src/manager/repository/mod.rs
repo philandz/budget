@@ -13,6 +13,22 @@ pub struct BudgetRepository {
     pool: MySqlPool,
 }
 
+impl BudgetRepository {
+    /// Test-only constructor. Builds a lazy MySQL pool pointing at whatever
+    /// DATABASE_URL specifies (falling back to a local default) without
+    /// actually opening a connection. Safe to use in tests that exercise
+    /// code paths that never query the DB (e.g. `resolve_role` Step 0
+    /// bypass); unsafe in tests that do query, because every query will
+    /// fail at execution time.
+    #[doc(hidden)]
+    pub async fn test_only_default_pool() -> std::sync::Arc<Self> {
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "mysql://root@127.0.0.1:3306/philand".to_string());
+        let pool = sqlx::MySqlPool::connect_lazy(&database_url).expect("invalid DATABASE_URL");
+        std::sync::Arc::new(Self { pool })
+    }
+}
+
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -59,7 +75,8 @@ impl BudgetRepository {
                 }
                 sqlx::query("DELETE FROM _sqlx_migrations WHERE success = false")
                     .execute(&pool)
-                    .await.ok();
+                    .await
+                    .ok();
             } else {
                 return Err(anyhow::anyhow!("{}", e));
             }
@@ -106,19 +123,25 @@ impl BudgetRepository {
         .execute(&self.pool)
         .await?;
 
-        self.get_budget_for_user(&id, created_by).await
+        self.get_budget_for_user(&id, created_by, None).await
     }
 
-    pub async fn get_budget_for_user(&self, budget_id: &str, user_id: &str) -> Result<DbBudget> {
+    pub async fn get_budget_for_user(
+        &self,
+        budget_id: &str,
+        user_id: &str,
+        override_role: Option<&str>,
+    ) -> Result<DbBudget> {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string();
         let month = now.format("%m").to_string();
-        let start_of_month = format!("{}-{:02}-01", year, month);
+        let start_of_month = format!("{year}-{month}-01");
 
+        let fallback_role = override_role.unwrap_or("");
         let row = sqlx::query_as::<_, DbBudget>(
             r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                     b.created_by, b.created_at, b.updated_at, b.deleted_at,
-                    bm.role AS my_role,
+                    CASE WHEN bm.role IS NOT NULL THEN bm.role ELSE ? END AS my_role,
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
                     COALESCE(cs.current_spend, 0) AS current_spend
@@ -141,6 +164,7 @@ impl BudgetRepository {
                ) cs ON cs.budget_id = b.id
                WHERE b.id = ? AND b.deleted_at IS NULL"#,
         )
+        .bind(fallback_role)
         .bind(user_id)
         .bind(&start_of_month)
         .bind(&start_of_month)
@@ -204,7 +228,7 @@ impl BudgetRepository {
         .bind(name).bind(type_str).bind(now).bind(budget_id)
         .execute(&self.pool)
         .await?;
-        self.get_budget_for_user(budget_id, updated_by).await
+        self.get_budget_for_user(budget_id, updated_by, None).await
     }
 
     pub async fn delete_budget(&self, budget_id: &str) -> Result<()> {
@@ -230,7 +254,7 @@ impl BudgetRepository {
         let month = now.format("%m").to_string();
         let start_of_month = format!("{}-{:02}-01", year, month);
 
-let rows = sqlx::query_as::<_, DbBudget>(
+        let rows = sqlx::query_as::<_, DbBudget>(
             r#"SELECT
                   b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                   b.created_by, b.created_at, b.updated_at, b.deleted_at,

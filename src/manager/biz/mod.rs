@@ -31,6 +31,32 @@ impl BudgetBiz {
         }
     }
 
+    /// Test-only constructor. Builds a `BudgetBiz` whose repo uses a
+    /// lazy MySQL pool (no DB connection is opened) and whose identity
+    /// client points at an unreachable address with a lazy channel. Only
+    /// safe to call in tests that never query the repo or call the
+    /// identity gRPC client through it.
+    #[doc(hidden)]
+    pub async fn test_only_no_clients() -> Self {
+        let repo = BudgetRepository::test_only_default_pool().await;
+        Self {
+            repo,
+            config: philand_configs::BudgetServiceConfig::default_for_tests(),
+            identity_client: Arc::new(Mutex::new(IdentityClient::test_only_unreachable())),
+        }
+    }
+
+    /// Test-only accessor exposing `resolve_role` for integration tests.
+    #[doc(hidden)]
+    pub async fn resolve_role_for_test(
+        &self,
+        budget_id: &str,
+        user_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<BudgetRole, tonic::Status> {
+        self.resolve_role(budget_id, user_id, user_type).await
+    }
+
     fn internal(e: impl ToString) -> Status {
         Status::internal(e.to_string())
     }
@@ -62,10 +88,20 @@ impl BudgetBiz {
         budget_id: &str,
         user_type: Option<&str>,
     ) -> Result<Budget, Status> {
-        self.assert_member(budget_id, user_id, user_type).await?;
+        let (role, is_member) = self.check_role(user_id, budget_id, user_type).await?;
+        if !is_member {
+            return Err(Status::permission_denied("Not a member of this budget"));
+        }
+        let role_label = match role {
+            BudgetRole::Owner => "owner",
+            BudgetRole::Manager => "manager",
+            BudgetRole::Contributor => "contributor",
+            BudgetRole::Viewer => "viewer",
+            BudgetRole::Unspecified => "",
+        };
         let db = self
             .repo
-            .get_budget_for_user(budget_id, user_id)
+            .get_budget_for_user(budget_id, user_id, Some(role_label))
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
         Ok(map_budget(db))

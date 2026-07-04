@@ -59,6 +59,18 @@ impl IdentityClient {
         user_type == Some("super_admin")
     }
 
+    /// Test-only constructor that points at an unreachable address using a
+    /// lazy gRPC channel. The connection is never opened, so this is safe
+    /// to use in tests that never actually call the identity gRPC service
+    /// through this client (any RPC attempt will fail at execution time).
+    #[doc(hidden)]
+    pub fn test_only_unreachable() -> Self {
+        let channel = Channel::from_static("http://127.0.0.1:1").connect_lazy();
+        Self {
+            inner: IdentityServiceClient::new(channel),
+        }
+    }
+
     /// Fetch every member of `org_id` from identity service. Used by
     /// budget and sharing to enrich `budget_members` / `participants`
     /// rows whose `display_name` and `email` columns are otherwise NULL
