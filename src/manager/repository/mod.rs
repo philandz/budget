@@ -101,10 +101,10 @@ impl BudgetRepository {
         let type_str = budget_type_to_db(budget_type);
 
         sqlx::query(
-            "INSERT INTO budgets (id, org_id, name, budget_type, currency, status, created_by, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)"
+            "INSERT INTO budgets (id, org_id, owner_id, name, budget_type, currency, status, created_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)"
         )
-        .bind(&id).bind(org_id).bind(name).bind(type_str).bind(currency)
+        .bind(&id).bind(org_id).bind(created_by).bind(name).bind(type_str).bind(currency)
         .bind(created_by).bind(now).bind(now)
         .execute(&self.pool)
         .await?;
