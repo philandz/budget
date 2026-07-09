@@ -44,21 +44,6 @@ impl BudgetRepository {
             let err_str = format!("{}", e);
             if err_str.contains("partially applied") {
                 tracing::warn!("Partial migration detected: {}", e);
-                if err_str.contains("20260527065921") {
-                    let has_cat_type: bool = sqlx::query_scalar(
-                        "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'cat_type'"
-                    )
-                    .fetch_one(&pool)
-                    .await.unwrap_or(false);
-                    if has_cat_type {
-                        tracing::warn!("cat_type column exists, marking migration as complete");
-                        sqlx::query(
-                            "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time) VALUES (20260527065921, 'add cat_type column', NOW(), true, 0x00, 0)"
-                        )
-                        .execute(&pool)
-                        .await.ok();
-                    }
-                }
                 if err_str.contains("20260507090228") {
                     let has_avatar: bool = sqlx::query_scalar(
                         "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
