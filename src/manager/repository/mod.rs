@@ -248,13 +248,13 @@ impl BudgetRepository {
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend
                FROM budgets b
-               INNER JOIN budget_members bm ON bm.budget_id BINARY = b.id BINARY AND bm.user_id BINARY = ? BINARY
-               LEFT JOIN budget_envelope_limits el ON el.budget_id BINARY = b.id BINARY
+               INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
+               LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id BINARY AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
                    GROUP BY budget_id BINARY
-               ) mc ON mc.budget_id = b.id BINARY
+               ) mc ON mc.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id BINARY AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
@@ -263,7 +263,7 @@ impl BudgetRepository {
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
                    GROUP BY budget_id BINARY
-               ) cs ON cs.budget_id = b.id BINARY
+               ) cs ON cs.budget_id = BINARY b.id
                WHERE b.org_id = ? AND b.deleted_at IS NULL
                ORDER BY b.created_at ASC"#,
         )
@@ -326,13 +326,13 @@ impl BudgetRepository {
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend
                FROM budgets b
-               LEFT JOIN budget_members bm ON bm.budget_id BINARY = b.id BINARY AND bm.user_id = ''
-               LEFT JOIN budget_envelope_limits el ON el.budget_id BINARY = b.id BINARY
+               LEFT JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = ''
+               LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id BINARY AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
                    GROUP BY budget_id BINARY
-               ) mc ON mc.budget_id = b.id BINARY
+               ) mc ON mc.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id BINARY AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
@@ -341,7 +341,7 @@ impl BudgetRepository {
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
                    GROUP BY budget_id BINARY
-               ) cs ON cs.budget_id = b.id BINARY
+               ) cs ON cs.budget_id = BINARY b.id
                WHERE b.deleted_at IS NULL{}{}{}
                ORDER BY b.created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -455,7 +455,7 @@ impl BudgetRepository {
             "SELECT bm.budget_id, bm.user_id, bm.role,
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
-             LEFT JOIN users u ON u.id BINARY = bm.user_id BINARY
+             LEFT JOIN users u ON u.id = BINARY bm.user_id
              WHERE bm.budget_id = ?
              ORDER BY bm.created_at ASC",
         )
@@ -470,7 +470,7 @@ impl BudgetRepository {
             "SELECT bm.budget_id, bm.user_id, bm.role,
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
-             LEFT JOIN users u ON u.id BINARY = bm.user_id BINARY
+             LEFT JOIN users u ON u.id = BINARY bm.user_id
              WHERE bm.budget_id = ? AND bm.user_id = ?",
         )
         .bind(budget_id)
