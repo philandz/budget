@@ -131,13 +131,13 @@ impl BudgetRepository {
                     COALESCE(mc.member_count, 0) AS member_count,
                     COALESCE(cs.current_spend, 0) AS current_spend
                FROM budgets b
-               LEFT JOIN budget_members bm ON bm.budget_id = b.id AND bm.user_id = ?
-               LEFT JOIN budget_envelope_limits el ON el.budget_id = b.id
+               LEFT JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
+               LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
                    GROUP BY budget_id
-               ) mc ON mc.budget_id = b.id
+               ) mc ON mc.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
@@ -146,8 +146,8 @@ impl BudgetRepository {
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
                    GROUP BY budget_id
-               ) cs ON cs.budget_id = b.id
-               WHERE b.id = ? AND b.deleted_at IS NULL"#,
+               ) cs ON cs.budget_id = BINARY b.id
+               WHERE BINARY b.id = BINARY ? AND b.deleted_at IS NULL"#,
         )
         .bind(fallback_role)
         .bind(user_id)
@@ -173,12 +173,12 @@ impl BudgetRepository {
                     COALESCE(mc.member_count, 0) AS member_count,
                     COALESCE(cs.current_spend, 0) AS current_spend
                FROM budgets b
-               LEFT JOIN budget_envelope_limits el ON el.budget_id = b.id
+               LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
                    GROUP BY budget_id
-               ) mc ON mc.budget_id = b.id
+               ) mc ON mc.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
@@ -187,8 +187,8 @@ impl BudgetRepository {
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
                    GROUP BY budget_id
-               ) cs ON cs.budget_id = b.id
-               WHERE b.id = ? AND b.deleted_at IS NULL"#,
+               ) cs ON cs.budget_id = BINARY b.id
+               WHERE BINARY b.id = BINARY ? AND b.deleted_at IS NULL"#,
         )
         .bind(&start_of_month)
         .bind(&start_of_month)
@@ -264,7 +264,7 @@ impl BudgetRepository {
                      AND deleted_at IS NULL
                    GROUP BY budget_id
                ) cs ON cs.budget_id = BINARY b.id
-               WHERE b.org_id = ? AND b.deleted_at IS NULL
+               WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL
                ORDER BY b.created_at ASC"#,
         )
         .bind(user_id)
@@ -365,7 +365,7 @@ impl BudgetRepository {
 
     pub async fn get_budget_org_id(&self, budget_id: &str) -> Result<Option<String>> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT org_id FROM budgets WHERE id = ? AND deleted_at IS NULL")
+            sqlx::query_as("SELECT org_id FROM budgets WHERE BINARY id = BINARY ? AND deleted_at IS NULL")
                 .bind(budget_id)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -374,7 +374,7 @@ impl BudgetRepository {
 
     pub async fn get_budget_is_private(&self, budget_id: &str) -> Result<bool> {
         let row: Option<(bool,)> =
-            sqlx::query_as("SELECT is_private FROM budgets WHERE id = ? AND deleted_at IS NULL")
+            sqlx::query_as("SELECT is_private FROM budgets WHERE BINARY id = BINARY ? AND deleted_at IS NULL")
                 .bind(budget_id)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -387,7 +387,7 @@ impl BudgetRepository {
         user_id: &str,
     ) -> Result<Option<BudgetRole>> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT role FROM budget_members WHERE budget_id = ? AND user_id = ?")
+            sqlx::query_as("SELECT role FROM budget_members WHERE BINARY budget_id = BINARY ? AND BINARY user_id = BINARY ?")
                 .bind(budget_id)
                 .bind(user_id)
                 .fetch_optional(&self.pool)
@@ -433,7 +433,7 @@ impl BudgetRepository {
         let now = now_unix();
         let role_str = budget_role_to_db(role);
         sqlx::query(
-            "UPDATE budget_members SET role = ?, updated_at = ? WHERE budget_id = ? AND user_id = ?"
+            "UPDATE budget_members SET role = ?, updated_at = ? WHERE BINARY budget_id = BINARY ? AND BINARY user_id = BINARY ?"
         )
         .bind(role_str).bind(now).bind(budget_id).bind(user_id)
         .execute(&self.pool)
@@ -442,7 +442,7 @@ impl BudgetRepository {
     }
 
     pub async fn remove_member(&self, budget_id: &str, user_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM budget_members WHERE budget_id = ? AND user_id = ?")
+        sqlx::query("DELETE FROM budget_members WHERE BINARY budget_id = BINARY ? AND BINARY user_id = BINARY ?")
             .bind(budget_id)
             .bind(user_id)
             .execute(&self.pool)
@@ -456,7 +456,7 @@ impl BudgetRepository {
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
              LEFT JOIN users u ON u.id = BINARY bm.user_id
-             WHERE bm.budget_id = ?
+             WHERE BINARY bm.budget_id = BINARY ?
              ORDER BY bm.created_at ASC",
         )
         .bind(budget_id)
@@ -471,7 +471,7 @@ impl BudgetRepository {
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
              LEFT JOIN users u ON u.id = BINARY bm.user_id
-             WHERE bm.budget_id = ? AND bm.user_id = ?",
+             WHERE BINARY bm.budget_id = BINARY ? AND BINARY bm.user_id = BINARY ?",
         )
         .bind(budget_id)
         .bind(user_id)
@@ -507,7 +507,7 @@ impl BudgetRepository {
 
     pub async fn get_envelope_limit(&self, budget_id: &str) -> Result<Option<i64>> {
         let row = sqlx::query(
-            "SELECT CAST(CAST(monthly_limit AS CHAR) AS UNSIGNED) FROM budget_envelope_limits WHERE budget_id = ?"
+            "SELECT CAST(CAST(monthly_limit AS CHAR) AS UNSIGNED) FROM budget_envelope_limits WHERE BINARY budget_id = BINARY ?"
         )
         .bind(budget_id)
         .fetch_optional(&self.pool)
@@ -529,7 +529,7 @@ impl BudgetRepository {
         let start_of_month = format!("{}-{:02}-01", year, month);
         let row = sqlx::query(
             "SELECT CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) FROM entries
-             WHERE budget_id = ? AND kind = 'expense'
+             WHERE BINARY budget_id = BINARY ? AND kind = 'expense'
                AND entry_date >= ?
                AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                AND deleted_at IS NULL",
@@ -568,7 +568,7 @@ impl BudgetRepository {
 
     pub async fn get_rollover_policy(&self, budget_id: &str) -> Result<RolloverPolicy> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT policy FROM budget_rollover_policies WHERE budget_id = ?")
+            sqlx::query_as("SELECT policy FROM budget_rollover_policies WHERE BINARY budget_id = BINARY ?")
                 .bind(budget_id)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -645,7 +645,7 @@ impl BudgetRepository {
                     principal, annual_rate, interest_type, start_date, maturity_date, bank_name,
                     quantity, unit, cost_basis_per_unit, ticker, exchange, avg_cost_per_share,
                     purchase_date, notes, created_by, created_at, updated_at
-             FROM invest_assets WHERE id = ? AND deleted_at IS NULL",
+             FROM invest_assets WHERE BINARY id = BINARY ? AND deleted_at IS NULL",
         )
         .bind(asset_id)
         .fetch_one(&self.pool)
@@ -662,7 +662,7 @@ impl BudgetRepository {
                     principal, annual_rate, interest_type, start_date, maturity_date, bank_name,
                     quantity, unit, cost_basis_per_unit, ticker, exchange, avg_cost_per_share,
                     purchase_date, notes, created_by, created_at, updated_at
-             FROM invest_assets WHERE budget_id = ? AND deleted_at IS NULL
+             FROM invest_assets WHERE BINARY budget_id = BINARY ? AND deleted_at IS NULL
              ORDER BY created_at ASC",
         )
         .bind(budget_id)
@@ -792,7 +792,7 @@ impl BudgetRepository {
     ) -> Result<Option<crate::converters::DbPriceSnapshot>> {
         let row = sqlx::query_as::<_, crate::converters::DbPriceSnapshot>(
             "SELECT id, asset_id, price, source, snapshot_date, created_at
-             FROM invest_price_snapshots WHERE asset_id = ?
+             FROM invest_price_snapshots WHERE BINARY asset_id = BINARY ?
              ORDER BY snapshot_date DESC, created_at DESC LIMIT 1",
         )
         .bind(asset_id)
@@ -808,7 +808,7 @@ impl BudgetRepository {
     ) -> Result<Vec<crate::converters::DbPriceSnapshot>> {
         let rows = sqlx::query_as::<_, crate::converters::DbPriceSnapshot>(
             "SELECT id, asset_id, price, source, snapshot_date, created_at
-             FROM invest_price_snapshots WHERE asset_id = ?
+             FROM invest_price_snapshots WHERE BINARY asset_id = BINARY ?
              ORDER BY snapshot_date DESC LIMIT ?",
         )
         .bind(asset_id)
