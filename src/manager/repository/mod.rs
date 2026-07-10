@@ -134,18 +134,18 @@ impl BudgetRepository {
                LEFT JOIN budget_members bm ON bm.budget_id = b.id AND bm.user_id = ?
                LEFT JOIN budget_envelope_limits el ON el.budget_id = b.id
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
                ) mc ON mc.budget_id = b.id
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
                    WHERE kind = 'expense'
                      AND entry_date >= ?
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
                ) cs ON cs.budget_id = b.id
                WHERE b.id = ? AND b.deleted_at IS NULL"#,
         )
@@ -175,18 +175,18 @@ impl BudgetRepository {
                FROM budgets b
                LEFT JOIN budget_envelope_limits el ON el.budget_id = b.id
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
                ) mc ON mc.budget_id = b.id
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
                    WHERE kind = 'expense'
                      AND entry_date >= ?
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
                ) cs ON cs.budget_id = b.id
                WHERE b.id = ? AND b.deleted_at IS NULL"#,
         )
@@ -248,22 +248,22 @@ impl BudgetRepository {
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend
                FROM budgets b
-               INNER JOIN budget_members bm ON bm.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci AND bm.user_id COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
-               LEFT JOIN budget_envelope_limits el ON el.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci
+               INNER JOIN budget_members bm ON bm.budget_id COLLATE utf8mb4_0900_ai_ci = b.id COLLATE utf8mb4_0900_ai_ci AND bm.user_id COLLATE utf8mb4_0900_ai_ci = ? COLLATE utf8mb4_0900_ai_ci
+               LEFT JOIN budget_envelope_limits el ON el.budget_id COLLATE utf8mb4_0900_ai_ci = b.id COLLATE utf8mb4_0900_ai_ci
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
-               ) mc ON mc.budget_id = b.id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
+               ) mc ON mc.budget_id = b.id COLLATE utf8mb4_0900_ai_ci
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
                    WHERE kind = 'expense'
                      AND entry_date >= ?
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
-               ) cs ON cs.budget_id = b.id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
+               ) cs ON cs.budget_id = b.id COLLATE utf8mb4_0900_ai_ci
                WHERE b.org_id = ? AND b.deleted_at IS NULL
                ORDER BY b.created_at ASC"#,
         )
@@ -326,22 +326,22 @@ impl BudgetRepository {
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend
                FROM budgets b
-               LEFT JOIN budget_members bm ON bm.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci AND bm.user_id = ''
-               LEFT JOIN budget_envelope_limits el ON el.budget_id COLLATE utf8mb4_unicode_ci = b.id COLLATE utf8mb4_unicode_ci
+               LEFT JOIN budget_members bm ON bm.budget_id COLLATE utf8mb4_0900_ai_ci = b.id COLLATE utf8mb4_0900_ai_ci AND bm.user_id = ''
+               LEFT JOIN budget_envelope_limits el ON el.budget_id COLLATE utf8mb4_0900_ai_ci = b.id COLLATE utf8mb4_0900_ai_ci
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, COUNT(*) AS member_count
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, COUNT(*) AS member_count
                    FROM budget_members
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
-               ) mc ON mc.budget_id = b.id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
+               ) mc ON mc.budget_id = b.id COLLATE utf8mb4_0900_ai_ci
                LEFT JOIN (
-                   SELECT budget_id COLLATE utf8mb4_unicode_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                   SELECT budget_id COLLATE utf8mb4_0900_ai_ci AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
                    FROM entries
                    WHERE kind = 'expense'
                      AND entry_date >= ?
                      AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
                      AND deleted_at IS NULL
-                   GROUP BY budget_id COLLATE utf8mb4_unicode_ci
-               ) cs ON cs.budget_id = b.id COLLATE utf8mb4_unicode_ci
+                   GROUP BY budget_id COLLATE utf8mb4_0900_ai_ci
+               ) cs ON cs.budget_id = b.id COLLATE utf8mb4_0900_ai_ci
                WHERE b.deleted_at IS NULL{}{}{}
                ORDER BY b.created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -455,7 +455,7 @@ impl BudgetRepository {
             "SELECT bm.budget_id, bm.user_id, bm.role,
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
-             LEFT JOIN users u ON u.id COLLATE utf8mb4_unicode_ci = bm.user_id COLLATE utf8mb4_unicode_ci
+             LEFT JOIN users u ON u.id COLLATE utf8mb4_0900_ai_ci = bm.user_id COLLATE utf8mb4_0900_ai_ci
              WHERE bm.budget_id = ?
              ORDER BY bm.created_at ASC",
         )
@@ -470,7 +470,7 @@ impl BudgetRepository {
             "SELECT bm.budget_id, bm.user_id, bm.role,
                     u.display_name, u.email, u.avatar
              FROM budget_members bm
-             LEFT JOIN users u ON u.id COLLATE utf8mb4_unicode_ci = bm.user_id COLLATE utf8mb4_unicode_ci
+             LEFT JOIN users u ON u.id COLLATE utf8mb4_0900_ai_ci = bm.user_id COLLATE utf8mb4_0900_ai_ci
              WHERE bm.budget_id = ? AND bm.user_id = ?",
         )
         .bind(budget_id)
