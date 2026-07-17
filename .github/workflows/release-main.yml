@@ -172,4 +172,13 @@ jobs:
             exit 0
           fi
           git commit -m "chore(deploy): update budget image to ${{ steps.version.outputs.version }}"
-          git push origin main
+          # Push with retry+rebase to survive concurrent pushes from other release-mains
+          for attempt in 1 2 3 4 5; do
+            if git push origin main; then
+              echo "Pushed on attempt $attempt"
+              break
+            fi
+            echo "::warning::Push rejected on attempt $attempt; rebasing onto latest origin/main"
+            git fetch origin main
+            git rebase origin/main
+          done
