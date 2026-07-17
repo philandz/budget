@@ -19,6 +19,12 @@ pub struct DbBudget {
     pub deleted_at: Option<i64>,
     // populated by JOIN with budget_members when fetching for a specific user
     pub my_role: Option<String>,
+    // envelope limit (0 if not set)
+    pub envelope_limit: Option<i64>,
+    // member count for this budget
+    pub member_count: Option<i32>,
+    // current month spend for this budget
+    pub current_spend: Option<i64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -119,22 +125,58 @@ pub fn map_budget(db: DbBudget) -> Budget {
         budget_type: budget_type_from_db(&db.budget_type) as i32,
         currency: db.currency,
         my_role: budget_role_from_db(db.my_role.as_deref().unwrap_or("viewer")) as i32,
+        envelope_limit: db.envelope_limit.unwrap_or(0),
+        current_spend: db.current_spend.unwrap_or(0),
+        burn_rate_pct: if db.envelope_limit.unwrap_or(0) > 0 {
+            (db.current_spend.unwrap_or(0) as f64 / db.envelope_limit.unwrap_or(0) as f64) * 100.0
+        } else {
+            0.0
+        },
+        member_count: db.member_count.unwrap_or(0),
     }
 }
 
 pub fn map_budget_member(db: DbBudgetMember) -> BudgetMember {
-    // For pending members (invited but not yet registered) the users JOIN
-    // returns NULL for display_name / email because no user row exists yet.
-    // In that case user_id holds the invited email address, so use it as the
-    // fallback for both fields so callers always get something meaningful.
-    let email = db
-        .email
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| db.user_id.clone());
-    let display_name = db
-        .display_name
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| db.user_id.clone());
+    map_budget_member_with(db, None)
+}
+
+/// Convert a `budget_members` row into the proto `BudgetMember`,
+/// optionally overriding `display_name` / `email` / `avatar` with the
+/// matched identity-service row.
+///
+/// Why this exists: the budget DB is on a separate MySQL host from the
+/// identity DB, so the `LEFT JOIN users` in `repo.list_members` always
+/// returns NULL. Without this override, callers (and end-users) see the
+/// raw `user_id` UUID in the display-name slot — which is the bug
+/// reported against `centaurging99@gmail.com`'s Budgets view.
+pub fn map_budget_member_with(
+    db: DbBudgetMember,
+    override_info: Option<&crate::manager::client::OrgUserInfo>,
+) -> BudgetMember {
+    // When the identity-service enrichment succeeds, prefer those
+    // fields — they are the live, freshest values. Only fall back to
+    // the DB row when enrichment didn't find a match.
+    let (display_name, email, avatar) = match override_info {
+        Some(o) => (o.display_name.clone(), o.email.clone(), o.avatar.clone()),
+        None => {
+            // For pending members (invited but not yet registered) the
+            // users JOIN returns NULL for display_name / email because no
+            // user row exists yet. In that case user_id holds the invited
+            // email address, so use it as the fallback for both fields so
+            // callers always get something meaningful.
+            let email = db
+                .email
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| db.user_id.clone());
+            let display_name = db
+                .display_name
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| db.user_id.clone());
+            (display_name, email, db.avatar.unwrap_or_default())
+        }
+    };
 
     BudgetMember {
         budget_id: db.budget_id,
@@ -142,7 +184,7 @@ pub fn map_budget_member(db: DbBudgetMember) -> BudgetMember {
         display_name,
         email,
         role: budget_role_from_db(&db.role) as i32,
-        avatar: db.avatar.unwrap_or_default(),
+        avatar,
     }
 }
 
