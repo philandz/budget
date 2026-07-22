@@ -57,7 +57,7 @@ jobs:
               continue
             fi
 
-            if [[ "$subject" =~ ^Merge\  ]]; then
+            if [[ "$subject" =~ ^Merge\  ]] || [[ "$subject" =~ ^Release\  ]]; then
               continue
             fi
             if ! [[ "$subject" =~ ^(feat|fix|docs|style|refactor|test|chore|ci)(\([^\)]+\))?!?:\ .+ ]]; then
