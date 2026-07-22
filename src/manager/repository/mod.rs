@@ -364,20 +364,22 @@ impl BudgetRepository {
     // -----------------------------------------------------------------------
 
     pub async fn get_budget_org_id(&self, budget_id: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT org_id FROM budgets WHERE BINARY id = BINARY ? AND deleted_at IS NULL")
-                .bind(budget_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT org_id FROM budgets WHERE BINARY id = BINARY ? AND deleted_at IS NULL",
+        )
+        .bind(budget_id)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(|(v,)| v))
     }
 
     pub async fn get_budget_is_private(&self, budget_id: &str) -> Result<bool> {
-        let row: Option<(bool,)> =
-            sqlx::query_as("SELECT is_private FROM budgets WHERE BINARY id = BINARY ? AND deleted_at IS NULL")
-                .bind(budget_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT is_private FROM budgets WHERE BINARY id = BINARY ? AND deleted_at IS NULL",
+        )
+        .bind(budget_id)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(|(v,)| v).unwrap_or(false))
     }
 
@@ -567,11 +569,12 @@ impl BudgetRepository {
     }
 
     pub async fn get_rollover_policy(&self, budget_id: &str) -> Result<RolloverPolicy> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT policy FROM budget_rollover_policies WHERE BINARY budget_id = BINARY ?")
-                .bind(budget_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT policy FROM budget_rollover_policies WHERE BINARY budget_id = BINARY ?",
+        )
+        .bind(budget_id)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row
             .map(|(p,)| rollover_policy_from_db(&p))
             .unwrap_or(RolloverPolicy::Reset))
