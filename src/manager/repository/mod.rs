@@ -41,7 +41,7 @@ impl BudgetRepository {
         migrator.set_ignore_missing(true);
 
         if let Err(e) = migrator.run(&pool).await {
-            let err_str = format!("{}", e);
+            let err_str = e.to_string();
             if err_str.contains("partially applied") {
                 tracing::warn!("Partial migration detected: {}", e);
                 if err_str.contains("20260507090228") {
@@ -163,7 +163,7 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string();
         let month = now.format("%m").to_string();
-        let start_of_month = format!("{}-{:02}-01", year, month);
+        let start_of_month = format!("{year}-{month:02}-01");
 
         let row = sqlx::query_as::<_, DbBudget>(
             r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
@@ -237,7 +237,7 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string();
         let month = now.format("%m").to_string();
-        let start_of_month = format!("{}-{:02}-01", year, month);
+        let start_of_month = format!("{year}-{month:02}-01");
 
         let rows = sqlx::query_as::<_, DbBudget>(
             r#"SELECT
@@ -277,6 +277,7 @@ impl BudgetRepository {
     }
 
     /// Paged, filtered budget list for a user with optional search, type, and role filters.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_budgets_paged(
         &self,
         org_id: &str,
@@ -292,7 +293,7 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string();
         let month = now.format("%m").to_string();
-        let start_of_month = format!("{}-{:02}-01", year, month);
+        let start_of_month = format!("{year}-{month:02}-01");
 
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
@@ -364,8 +365,7 @@ impl BudgetRepository {
 
         // Build data query SQL
         let data_sql = if has_role {
-            let mut sql = format!(
-                r#"SELECT
+            let mut sql = r#"SELECT
                       b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                       b.created_by, b.created_at, b.updated_at, b.deleted_at,
                       bm.role AS my_role,
@@ -390,7 +390,7 @@ impl BudgetRepository {
                        GROUP BY budget_id
                    ) cs ON cs.budget_id = BINARY b.id
                    WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
-            );
+                .to_string();
             if has_search {
                 sql.push_str(" AND b.name LIKE ?");
             }
@@ -398,13 +398,11 @@ impl BudgetRepository {
                 sql.push_str(" AND b.budget_type = ?");
             }
             sql.push_str(&format!(
-                " ORDER BY {} {} LIMIT ? OFFSET ?",
-                sort_column, sort_direction
+                " ORDER BY {sort_column} {sort_direction} LIMIT ? OFFSET ?"
             ));
             sql
         } else {
-            let mut sql = format!(
-                r#"SELECT
+            let mut sql = r#"SELECT
                       b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                       b.created_by, b.created_at, b.updated_at, b.deleted_at,
                       bm.role AS my_role,
@@ -429,7 +427,7 @@ impl BudgetRepository {
                        GROUP BY budget_id
                    ) cs ON cs.budget_id = BINARY b.id
                    WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
-            );
+                .to_string();
             if has_search {
                 sql.push_str(" AND b.name LIKE ?");
             }
@@ -437,8 +435,7 @@ impl BudgetRepository {
                 sql.push_str(" AND b.budget_type = ?");
             }
             sql.push_str(&format!(
-                " ORDER BY {} {} LIMIT ? OFFSET ?",
-                sort_column, sort_direction
+                " ORDER BY {sort_column} {sort_direction} LIMIT ? OFFSET ?"
             ));
             sql
         };
@@ -478,7 +475,7 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string();
         let month = now.format("%m").to_string();
-        let start_of_month = format!("{}-{:02}-01", year, month);
+        let start_of_month = format!("{year}-{month:02}-01");
 
         let offset = (page - 1) * page_size;
 
@@ -719,7 +716,7 @@ impl BudgetRepository {
         let now = chrono::Utc::now();
         let year = now.format("%Y").to_string();
         let month = now.format("%m").to_string();
-        let start_of_month = format!("{}-{:02}-01", year, month);
+        let start_of_month = format!("{year}-{month:02}-01");
         let row = sqlx::query(
             "SELECT CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) FROM entries
              WHERE BINARY budget_id = BINARY ? AND kind = 'expense'

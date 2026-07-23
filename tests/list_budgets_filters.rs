@@ -238,7 +238,6 @@ fn page_size_clamped_to_range() {
     let _sql = builder.build_sql();
     // page_size=0 should be clamped to 1 internally
     // (the actual clamping happens at handler level before calling repo)
-    assert!(true);
 }
 
 #[test]

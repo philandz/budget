@@ -13,7 +13,7 @@ use crate::pb::service::budget::{
     GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest, GetRolloverPolicyResponse,
     InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
     ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse,
-    ListBudgetParams, ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest,
+    ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest,
     ListBudgetsResponse, ListInvestAssetsRequest, ListInvestAssetsResponse,
     ListPriceSnapshotsRequest, ListPriceSnapshotsResponse, ListTemplatesRequest,
     ListTemplatesResponse, PriceSnapshot, RemoveBudgetMemberRequest, RemoveBudgetMemberResponse,
@@ -146,7 +146,7 @@ impl BudgetService for BudgetHandler {
     ) -> Result<Response<ListBudgetsResponse>, Status> {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let req = request.into_inner();
-        let params = req.params.unwrap_or_else(|| ListBudgetParams::default());
+        let params = req.params.unwrap_or_default();
         let (budgets, meta) = self
             .biz
             .list_budgets_paged(&user_id, &req.org_id, params)
