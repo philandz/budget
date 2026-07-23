@@ -276,6 +276,197 @@ impl BudgetRepository {
         Ok(rows)
     }
 
+    /// Paged, filtered budget list for a user with optional search, type, and role filters.
+    pub async fn list_budgets_paged(
+        &self,
+        org_id: &str,
+        user_id: &str,
+        q: Option<&str>,
+        budget_type: Option<&str>,
+        role: Option<&str>,
+        sort_by: Option<&str>,
+        sort_dir: Option<&str>,
+        page: i32,
+        page_size: i32,
+    ) -> Result<(Vec<DbBudget>, i64)> {
+        let now = chrono::Utc::now();
+        let year = now.format("%Y").to_string();
+        let month = now.format("%m").to_string();
+        let start_of_month = format!("{}-{:02}-01", year, month);
+
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let offset = (page - 1) * page_size;
+
+        // Whitelist sort column
+        let sort_column = match sort_by {
+            Some("name") => "b.name",
+            _ => "b.updated_at",
+        };
+        let sort_direction = if sort_dir == Some("asc") {
+            "ASC"
+        } else {
+            "DESC"
+        };
+
+        let q_str = q.filter(|s| !s.is_empty());
+        let type_str = budget_type.filter(|s| !s.is_empty());
+        let role_str = role.filter(|s| !s.is_empty());
+        let has_search = q_str.is_some();
+        let has_type = type_str.is_some();
+        let has_role = role_str.is_some();
+        let search_like = q_str.map(|s| format!("%{}%", s));
+
+        // Build COUNT query
+        let count_sql = if has_role {
+            let mut sql = r#"SELECT COUNT(*)
+               FROM budgets b
+               INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
+               WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
+                .to_string();
+            if has_search {
+                sql.push_str(" AND b.name LIKE ?");
+            }
+            if has_type {
+                sql.push_str(" AND b.budget_type = ?");
+            }
+            sql.push_str(" AND bm.role = ?");
+            sql
+        } else {
+            let mut sql = r#"SELECT COUNT(*)
+               FROM budgets b
+               INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
+               WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
+                .to_string();
+            if has_search {
+                sql.push_str(" AND b.name LIKE ?");
+            }
+            if has_type {
+                sql.push_str(" AND b.budget_type = ?");
+            }
+            sql
+        };
+
+        let total: i64 = {
+            let mut q = sqlx::query_scalar::<_, i64>(&count_sql);
+            q = q.bind(user_id).bind(org_id);
+            if let Some(ref sl) = search_like {
+                q = q.bind(sl);
+            }
+            if let Some(ref ts) = type_str {
+                q = q.bind(ts);
+            }
+            if let Some(ref rs) = role_str {
+                q = q.bind(rs);
+            }
+            q.fetch_one(&self.pool).await?
+        };
+
+        // Build data query SQL
+        let data_sql = if has_role {
+            let mut sql = format!(
+                r#"SELECT
+                      b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
+                      b.created_by, b.created_at, b.updated_at, b.deleted_at,
+                      bm.role AS my_role,
+                      el.monthly_limit AS envelope_limit,
+                      COALESCE(mc.member_count, 0) AS member_count,
+                      COALESCE(cs.current_spend, 0) AS current_spend
+                   FROM budgets b
+                   INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ? AND bm.role = ?
+                   LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
+                   LEFT JOIN (
+                       SELECT budget_id AS budget_id, COUNT(*) AS member_count
+                       FROM budget_members
+                       GROUP BY budget_id
+                   ) mc ON mc.budget_id = BINARY b.id
+                   LEFT JOIN (
+                       SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                       FROM entries
+                       WHERE kind = 'expense'
+                         AND entry_date >= ?
+                         AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
+                         AND deleted_at IS NULL
+                       GROUP BY budget_id
+                   ) cs ON cs.budget_id = BINARY b.id
+                   WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
+            );
+            if has_search {
+                sql.push_str(" AND b.name LIKE ?");
+            }
+            if has_type {
+                sql.push_str(" AND b.budget_type = ?");
+            }
+            sql.push_str(&format!(
+                " ORDER BY {} {} LIMIT ? OFFSET ?",
+                sort_column, sort_direction
+            ));
+            sql
+        } else {
+            let mut sql = format!(
+                r#"SELECT
+                      b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
+                      b.created_by, b.created_at, b.updated_at, b.deleted_at,
+                      bm.role AS my_role,
+                      el.monthly_limit AS envelope_limit,
+                      COALESCE(mc.member_count, 0) AS member_count,
+                      COALESCE(cs.current_spend, 0) AS current_spend
+                   FROM budgets b
+                   INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
+                   LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
+                   LEFT JOIN (
+                       SELECT budget_id AS budget_id, COUNT(*) AS member_count
+                       FROM budget_members
+                       GROUP BY budget_id
+                   ) mc ON mc.budget_id = BINARY b.id
+                   LEFT JOIN (
+                       SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
+                       FROM entries
+                       WHERE kind = 'expense'
+                         AND entry_date >= ?
+                         AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
+                         AND deleted_at IS NULL
+                       GROUP BY budget_id
+                   ) cs ON cs.budget_id = BINARY b.id
+                   WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
+            );
+            if has_search {
+                sql.push_str(" AND b.name LIKE ?");
+            }
+            if has_type {
+                sql.push_str(" AND b.budget_type = ?");
+            }
+            sql.push_str(&format!(
+                " ORDER BY {} {} LIMIT ? OFFSET ?",
+                sort_column, sort_direction
+            ));
+            sql
+        };
+
+        // Bind parameters in the correct order
+        // For role-filtered: user_id, role, start_of_month, start_of_month, org_id, [search], [type], page_size, offset
+        // For non-role: user_id, start_of_month, start_of_month, org_id, [search], [type], page_size, offset
+        let rows = {
+            let mut q = sqlx::query_as::<_, DbBudget>(&data_sql);
+            if let Some(ref rs) = role_str {
+                q = q.bind(user_id).bind(rs);
+            } else {
+                q = q.bind(user_id);
+            }
+            q = q.bind(&start_of_month).bind(&start_of_month).bind(org_id);
+            if let Some(ref sl) = search_like {
+                q = q.bind(sl);
+            }
+            if let Some(ref ts) = type_str {
+                q = q.bind(ts);
+            }
+            q = q.bind(page_size).bind(offset);
+            q.fetch_all(&self.pool).await?
+        };
+
+        Ok((rows, total))
+    }
+
     pub async fn list_budgets_admin(
         &self,
         org_id: &str,
