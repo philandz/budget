@@ -8,7 +8,8 @@ use crate::converters::{map_budget, map_budget_member, map_budget_member_with, D
 use crate::manager::client::{self, IdentityClient};
 use crate::manager::repository::BudgetRepository;
 use crate::pb::service::budget::{
-    Budget, BudgetMember, BudgetRole, BudgetTemplate, BudgetType, EnvelopeLimit, RolloverPolicy,
+    Budget, BudgetMember, BudgetRole, BudgetTemplate, BudgetType, EnvelopeLimit, ListBudgetParams,
+    PageMeta, RolloverPolicy,
 };
 use crate::pb::shared::organization::OrgRole;
 
@@ -199,6 +200,63 @@ impl BudgetBiz {
             .await
             .map_err(Self::internal)?;
         Ok(rows.into_iter().map(map_budget).collect())
+    }
+
+    pub async fn list_budgets_paged(
+        &self,
+        user_id: &str,
+        org_id: &str,
+        params: ListBudgetParams,
+    ) -> Result<(Vec<Budget>, PageMeta), Status> {
+        let q = params.q.as_ref().filter(|s| !s.is_empty());
+        let budget_type = params.budget_type.filter(|&t| t != 0);
+        let role = params.role.filter(|&r| r != 0);
+        let sort_by = params.sort_by.as_ref().filter(|s| !s.is_empty());
+        let sort_dir = params.sort_dir.as_ref().filter(|s| !s.is_empty());
+        let page = params.page.unwrap_or(1).max(1);
+        let page_size = params.page_size.unwrap_or(20).clamp(1, 100).max(1);
+
+        let budget_type_db = budget_type.and_then(|t| {
+            BudgetType::try_from(t)
+                .ok()
+                .filter(|&bt| bt != BudgetType::Unspecified)
+        });
+        let role_db = role.and_then(|r| {
+            BudgetRole::try_from(r)
+                .ok()
+                .filter(|&br| br != BudgetRole::Unspecified)
+        });
+
+        let (rows, total) = self
+            .repo
+            .list_budgets_paged(
+                org_id,
+                user_id,
+                q.map(String::as_str),
+                budget_type_db.map(crate::converters::budget_type_to_db),
+                role_db.map(crate::converters::budget_role_to_db),
+                sort_by.map(String::as_str),
+                sort_dir.map(String::as_str),
+                page,
+                page_size,
+            )
+            .await
+            .map_err(Self::internal)?;
+
+        let total_pages = if total == 0 {
+            0
+        } else {
+            ((total + page_size as i64 - 1) / page_size as i64) as i32
+        };
+
+        let meta = PageMeta {
+            page,
+            page_size,
+            total_pages,
+            total_rows: total,
+        };
+
+        Ok((rows.into_iter().map(map_budget).collect(), meta))
     }
 
     pub async fn list_budgets_admin(

@@ -146,8 +146,15 @@ impl BudgetService for BudgetHandler {
     ) -> Result<Response<ListBudgetsResponse>, Status> {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let req = request.into_inner();
-        let budgets = self.biz.list_budgets(&user_id, &req.org_id).await?;
-        Ok(Response::new(ListBudgetsResponse { budgets }))
+        let params = req.params.unwrap_or_default();
+        let (budgets, meta) = self
+            .biz
+            .list_budgets_paged(&user_id, &req.org_id, params)
+            .await?;
+        Ok(Response::new(ListBudgetsResponse {
+            budgets,
+            meta: Some(meta),
+        }))
     }
 
     async fn list_budgets_admin(

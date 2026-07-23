@@ -107,8 +107,31 @@ message UpdateBudgetResponse { Budget budget = 1; }
 message DeleteBudgetRequest  { string budget_id = 1; }
 message DeleteBudgetResponse { bool success = 1; }
 
-message ListBudgetsRequest  { string org_id = 1; }
-message ListBudgetsResponse { repeated Budget budgets = 1; }
+message ListBudgetParams {
+  optional string q = 1;
+  optional BudgetType budget_type = 2;
+  optional BudgetRole role = 3;
+  optional string sort_by = 4;
+  optional string sort_dir = 5;
+  optional int32 page = 6;
+  optional int32 page_size = 7;
+}
+
+message PageMeta {
+  int32 page = 1;
+  int32 page_size = 2;
+  int32 total_pages = 3;
+  int64 total_rows = 4;
+}
+
+message ListBudgetsRequest {
+  string org_id = 1;
+  ListBudgetParams params = 2;
+}
+message ListBudgetsResponse {
+  repeated Budget budgets = 1;
+  PageMeta meta = 2;
+}
 
 // Admin: list all budgets across all orgs (super_admin only)
 message ListBudgetsAdminRequest {
