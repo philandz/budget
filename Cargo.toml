@@ -36,6 +36,8 @@ philand_env        = { package = "env",         path = "../libs/env" }
 philand_time       = { package = "time",        path = "../libs/time" }
 philand_random     = { package = "random",      path = "../libs/random" }
 philand_validator  = { package = "validator",   path = "../libs/validator" }
+philand_notify     = { package = "notify",       path = "../libs/notify" }
+rust_decimal      = { version = "1", features = ["serde-with-str"] }
 
 [dev-dependencies]
 serial_test = "3"

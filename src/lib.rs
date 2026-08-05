@@ -6,6 +6,9 @@ pub mod pb {
         pub mod identity {
             tonic::include_proto!("service.identity");
         }
+        pub mod portfolio {
+            tonic::include_proto!("service.portfolio");
+        }
     }
     pub mod common {
         pub mod base {

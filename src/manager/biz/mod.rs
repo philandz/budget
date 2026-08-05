@@ -13,6 +13,8 @@ use crate::pb::service::budget::{
 };
 use crate::pb::shared::organization::OrgRole;
 
+pub mod portfolio;
+
 pub struct BudgetBiz {
     pub repo: Arc<BudgetRepository>,
     pub config: BudgetServiceConfig,

@@ -1,6 +1,8 @@
 use crate::pb::common::base::Base;
 use crate::pb::service::budget::{Budget, BudgetMember, BudgetRole, BudgetType, RolloverPolicy};
 
+pub mod portfolio;
+
 // ---------------------------------------------------------------------------
 // DB row structs
 // ---------------------------------------------------------------------------
