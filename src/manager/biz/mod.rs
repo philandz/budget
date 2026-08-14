@@ -932,16 +932,11 @@ impl BudgetBiz {
                     .get_latest_price_snapshot(&db.id)
                     .await
                     .map_err(Self::internal)?;
+                let qty = db.quantity.unwrap_or(0.0);
                 let (qty, cb_per_unit) = if db.asset_type == "gold" {
-                    (
-                        db.quantity.unwrap_or(0.0),
-                        db.cost_basis_per_unit.unwrap_or(0),
-                    )
+                    (qty, db.cost_basis_per_unit.unwrap_or(0))
                 } else {
-                    (
-                        db.quantity.unwrap_or(0.0),
-                        db.avg_cost_per_share.unwrap_or(0),
-                    )
+                    (qty, db.avg_cost_per_share.unwrap_or(0))
                 };
                 let cost_basis = (qty * cb_per_unit as f64).round() as i64;
                 let (current_value, last_updated) = if let Some(snap) = snapshot {
