@@ -71,7 +71,7 @@ async fn apply_pending_migrations_idempotently() {
     eprintln!("orphan row delete affected={}", deleted);
 
     // Verify the macro actually embedded our 15 pending migrations.
-    let mut count_only = sqlx::migrate!("./migrations");
+    let count_only = sqlx::migrate!("./migrations");
     let pending_count = count_only.iter().count();
     eprintln!("sqlx::migrate! embedded {} migrations", pending_count);
 

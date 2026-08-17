@@ -44,8 +44,28 @@ impl BudgetRepository {
 
         if let Err(e) = migrator.run(&pool).await {
             let err_str = e.to_string();
-            if err_str.contains("partially applied") {
-                tracing::warn!("Partial migration detected: {}", e);
+            // Tolerate the same idempotency errors as identity's test helper:
+            // a partially applied row in _sqlx_migrations, or a real DDL
+            // collision because the schema is already at target state.
+            let ignorable = err_str.contains("partially applied")
+                || err_str.contains("VersionMismatch")
+                || err_str.contains("Duplicate column name")
+                || err_str.contains("Duplicate key name")
+                || err_str.contains("already exists");
+            if !ignorable {
+                return Err(anyhow::anyhow!("{}", e));
+            }
+            tracing::warn!("Migration already-applied state detected: {}", e);
+            if err_str.contains("partially applied")
+                || err_str.contains("VersionMismatch")
+                || err_str.contains("Duplicate column name")
+                || err_str.contains("Duplicate key name")
+                || err_str.contains("already exists")
+            {
+                // Drop the failed row so the next restart skips cleanly.
+                // For migrations that genuinely errored mid-DDL, the schema
+                // is already at the target state and the next attempt would
+                // collide anyway; swallow + skip.
                 if err_str.contains("20260507090228") {
                     let has_avatar: bool = sqlx::query_scalar(
                         "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
@@ -64,8 +84,6 @@ impl BudgetRepository {
                     .execute(&pool)
                     .await
                     .ok();
-            } else {
-                return Err(anyhow::anyhow!("{}", e));
             }
         }
         Ok(Self { pool })

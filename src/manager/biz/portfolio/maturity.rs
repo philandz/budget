@@ -24,8 +24,21 @@ impl PortfolioBiz {
     pub async fn run_maturity_scan(&self) -> Result<u32, tonic::Status> {
         let today = today_business_date();
         let mut tx = self.repo.begin().await.map_err(internal)?;
+        // portfolio_fixed_deposits stores asset-specific fields keyed by
+        // `asset_id` only; `budget_id` lives on portfolio_assets (the parent
+        // table shared across all asset classes). The previous SELECT against
+        // portfolio_fixed_deposits in isolation (`SELECT budget_id, id ...`)
+        // referenced columns that don't exist on that table, causing a SQL
+        // 1054 ("Unknown column 'budget_id'") on every cycle.
+        //
+        // Join to portfolio_assets for `budget_id`. Note portfolio_assets PK
+        // is `id`, with per-class tables (`portfolio_fixed_deposits.asset_id`,
+        // etc.) referencing it as a foreign key.
         let due: Vec<(String, String)> = sqlx::query_as(
-            "SELECT budget_id, id FROM portfolio_fixed_deposits WHERE maturity_date <= ?",
+            "SELECT pa.budget_id, pfd.asset_id
+             FROM portfolio_fixed_deposits pfd
+             JOIN portfolio_assets pa ON pa.id = pfd.asset_id
+             WHERE pfd.maturity_date <= ? AND pa.status = 'ACTIVE'",
         )
         .bind(today)
         .fetch_all(&mut *tx)
