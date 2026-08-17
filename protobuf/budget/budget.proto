@@ -124,7 +124,7 @@ message PageMeta {
   int64 total_rows = 4;
 }
 
-message ListBudgetsRequest {
+message ListBudgetsRequest  {
   string org_id = 1;
   ListBudgetParams params = 2;
 }
@@ -167,6 +167,7 @@ message AddBudgetMemberRequest {
   string budget_id = 1;
   string user_id   = 2;
   BudgetRole role  = 3;
+  bool system_actor = 4;  // internal: bypass Manager check when true
 }
 message AddBudgetMemberResponse { BudgetMember member = 1; }
 
@@ -185,6 +186,10 @@ message RemoveBudgetMemberResponse { bool success = 1; }
 
 message ListBudgetMembersRequest  { string budget_id = 1; }
 message ListBudgetMembersResponse { repeated BudgetMember members = 1; }
+
+// Admin: list budget members (super_admin only)
+message ListBudgetMembersAdminRequest { string budget_id = 1; }
+message ListBudgetMembersAdminResponse { repeated BudgetMember members = 1; }
 
 // ---------------------------------------------------------------------------
 // Envelope limits & burn-rate
@@ -372,8 +377,10 @@ service BudgetService {
   }
   // Admin: list all budgets (super_admin only)
   rpc ListBudgetsAdmin(ListBudgetsAdminRequest) returns (ListBudgetsAdminResponse) {}
-  // Admin: get budget by ID (super_admin only)
+// Admin: get budget by ID (super_admin only)
   rpc GetBudgetAdmin(GetBudgetAdminRequest) returns (GetBudgetAdminResponse) {}
+  // Admin: list budget members (super_admin only)
+  rpc ListBudgetMembersAdmin(ListBudgetMembersAdminRequest) returns (ListBudgetMembersAdminResponse) {}
 
   // Role authority (internal — no public HTTP binding)
   rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}

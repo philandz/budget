@@ -94,6 +94,38 @@ service IdentityService {
 
   // Internal — used by Budget service to resolve org membership during CheckRole fallback
   rpc GetOrgRole(GetOrgRoleRequest) returns (GetOrgRoleResponse) {}
+
+  // OAuth — Google Sign-In
+  rpc LoginWithGoogle(LoginWithGoogleRequest) returns (LoginResponse) {
+    option (google.api.http) = { post: "/auth/google" body: "*" };
+  }
+
+  // Logged-in password change (mandatory email OTP step)
+  rpc RequestPasswordChangeOtp(RequestPasswordChangeOtpRequest) returns (RequestPasswordChangeOtpResponse) {
+    option (google.api.http) = { post: "/password/request-otp" body: "*" };
+  }
+  rpc ConfirmPasswordChangeOtp(ConfirmPasswordChangeOtpRequest) returns (ConfirmPasswordChangeOtpResponse) {
+    option (google.api.http) = { post: "/password/confirm-otp" body: "*" };
+  }
+
+  // Super-admin platform settings (mail provider config)
+  rpc GetResendConfig(GetResendConfigRequest) returns (GetResendConfigResponse) {
+    option (google.api.http) = { get: "/settings/resend" };
+  }
+  rpc UpdateResendConfig(UpdateResendConfigRequest) returns (UpdateResendConfigResponse) {
+    option (google.api.http) = { patch: "/settings/resend" body: "*" };
+  }
+  rpc TestResendConfig(TestResendConfigRequest) returns (TestResendConfigResponse) {
+    option (google.api.http) = { post: "/settings/resend/test" body: "*" };
+  }
+
+  // Super-admin platform settings (system environment & URLs)
+  rpc GetSystemConfig(GetSystemConfigRequest) returns (GetSystemConfigResponse) {
+    option (google.api.http) = { get: "/settings/system" };
+  }
+  rpc UpdateSystemConfig(UpdateSystemConfigRequest) returns (UpdateSystemConfigResponse) {
+    option (google.api.http) = { patch: "/settings/system" body: "*" };
+  }
 }
 
 message RegisterRequest {
@@ -118,7 +150,7 @@ message LoginResponse {
 }
 
 message OrganizationSummary {
-  string id = 1;
+  common.base.Base base = 1;
   string name = 2;
   shared.organization.OrgRole role = 3;
 }
@@ -194,17 +226,17 @@ message OrgMemberView {
   shared.organization.OrgRole role = 4;
   shared.organization.MemberStatus status = 5;
   int64 joined_at = 6;
+  string avatar = 7;
 }
 
 message OrganizationInvitation {
-  string id = 1;
+  common.base.Base base = 1;
   string org_id = 2;
   string inviter_id = 3;
   string invitee_email = 4;
   shared.organization.OrgRole org_role = 5;
   shared.organization.InvitationStatus status = 6;
   int64 expires_at = 7;
-  int64 created_at = 8;
 }
 
 message ListOrgMembersRequest {
@@ -379,4 +411,98 @@ message GetOrgRoleRequest {
 
 message GetOrgRoleResponse {
   shared.organization.OrgRole role = 1;  // OR_NONE if not a member
+}
+
+// ---------------------------------------------------------------------------
+// Google OAuth
+// ---------------------------------------------------------------------------
+
+message LoginWithGoogleRequest {
+  string id_token = 1;  // Google ID token from the frontend GIS SDK
+}
+
+// ---------------------------------------------------------------------------
+// Logged-in password change (mandatory email OTP step)
+// ---------------------------------------------------------------------------
+
+message RequestPasswordChangeOtpRequest {
+  string current_password = 1;
+  string new_password     = 2;  // validated; applied only after OTP confirmation
+}
+
+message RequestPasswordChangeOtpResponse {
+  string message     = 1;  // "OTP sent if the account matched."
+  int32  ttl_seconds = 2;  // 600
+}
+
+message ConfirmPasswordChangeOtpRequest {
+  string otp          = 1;  // 6 digits
+  string new_password = 2;
+}
+
+message ConfirmPasswordChangeOtpResponse {}
+
+// ---------------------------------------------------------------------------
+// Super-admin platform settings
+// ---------------------------------------------------------------------------
+
+message GetResendConfigRequest {}
+
+message GetResendConfigResponse {
+  bool   configured   = 1;  // any source: db OR env
+  string source       = 2;  // "db" | "env" | "none"
+  string masked_key   = 3;  // "***last4" — never the raw key
+  string from_address = 4;  // public
+  string reply_to     = 5;
+}
+
+message UpdateResendConfigRequest {
+  string api_key      = 1;  // encrypted on write; never returned in full
+  string from_address = 2;
+  string reply_to     = 3;
+}
+
+message UpdateResendConfigResponse {
+  GetResendConfigResponse current = 1;
+}
+
+message TestResendConfigRequest {
+  string recipient_email = 1;
+}
+
+message TestResendConfigResponse {
+  string message_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Super-admin platform settings — system environment & URLs
+// ---------------------------------------------------------------------------
+
+message GetSystemConfigRequest {}
+
+message GetSystemConfigResponse {
+  // Public origin used to build absolute URLs in emails.
+  string app_public_base_url = 1;
+  // Shown in the footer of every transactional email.
+  string support_email = 2;
+  // Default locale for deep-links inside emails ("en" or "vi").
+  string default_locale = 3;
+  // Default From address when mail_config has none configured.
+  string mail_from_address = 4;
+  // Which source is in effect for each field ("db" | "env" | "default").
+  string source_app_public_base_url = 5;
+  string source_support_email       = 6;
+  string source_default_locale      = 7;
+  string source_mail_from_address   = 8;
+}
+
+message UpdateSystemConfigRequest {
+  string app_public_base_url = 1;
+  string support_email       = 2;
+  string default_locale      = 3;
+  string mail_from_address   = 4;
+}
+
+message UpdateSystemConfigResponse {
+  GetSystemConfigResponse current = 1;
 }
