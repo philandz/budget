@@ -530,11 +530,15 @@ impl BudgetBiz {
         budget_id: &str,
         monthly_limit: i64,
     ) -> Result<EnvelopeLimit, Status> {
+        // `entries` lives in the entry-service DB; budget's DB does not have
+        // it. If the query errors (table missing, etc.), degrade to 0 spend
+        // rather than failing the whole burn-rate request.
         let current_spend = self
             .repo
             .get_current_month_spend(budget_id)
             .await
-            .map_err(Self::internal)?;
+            .map_err(Self::internal)
+            .unwrap_or(0);
 
         let burn_rate_pct = if monthly_limit > 0 {
             let now = chrono::Utc::now();
