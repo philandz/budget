@@ -6,8 +6,7 @@
 //! for any version NOT already present.
 //!
 //! Run with: DATABASE_URL=... cargo test --test synthesize_history -- --ignored --nocapture
-use sqlx::{MySqlPool, Row};
-use std::path::Path;
+use sqlx::MySqlPool;
 
 #[tokio::test]
 #[ignore = "manual probe; requires DATABASE_URL"]
