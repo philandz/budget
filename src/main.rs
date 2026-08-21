@@ -44,9 +44,10 @@ async fn main() -> anyhow::Result<()> {
 
     let identity_url =
         std::env::var("IDENTITY_GRPC_URL").unwrap_or_else(|_| "http://127.0.0.1:50101".to_string());
-    let identity_client = IdentityClient::connect(&identity_url)
+    let identity_channel = philand_application::connect::connect_default(&identity_url)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to identity gRPC: {e}"))?;
+    let identity_client = IdentityClient::from_channel(identity_channel);
     tracing::info!("Identity gRPC client connected to {}", identity_url);
 
     let biz = Arc::new(BudgetBiz::new(repo, config.clone(), identity_client));
@@ -62,9 +63,11 @@ async fn main() -> anyhow::Result<()> {
     ));
     let portfolio_biz = Arc::new(PortfolioBiz::new(
         (*portfolio_repo).clone(),
-        IdentityClient::connect(&identity_url)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}"))?,
+        IdentityClient::from_channel(
+            philand_application::connect::connect_default(&identity_url)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}"))?
+        ),
         biz.clone(),
     ));
     let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());

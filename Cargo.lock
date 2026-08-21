@@ -67,6 +67,9 @@ name = "application"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tokio",
+ "tonic",
+ "tracing",
 ]
 
 [[package]]
@@ -320,6 +323,7 @@ dependencies = [
  "configs",
  "dotenvy",
  "env",
+ "hex",
  "logging",
  "notify",
  "prost",
@@ -330,6 +334,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "sqlx",
  "storage",
  "table",
@@ -2891,6 +2896,7 @@ dependencies = [
  "table",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
 ]
 
