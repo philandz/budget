@@ -16,7 +16,6 @@ pub mod outbox;
 pub mod providers;
 pub mod quantity;
 pub mod rate;
-pub mod rebalance;
 pub mod refresh;
 pub mod rollover;
 pub mod snapshot;
