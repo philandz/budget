@@ -9,6 +9,7 @@ use crate::converters::{
 };
 use crate::pb::service::budget::{BudgetRole, BudgetType, RolloverPolicy};
 
+pub mod fx_rates;
 pub mod portfolio;
 
 pub struct BudgetRepository {

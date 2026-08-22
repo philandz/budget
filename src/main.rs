@@ -5,6 +5,7 @@ use budget::manager::biz::portfolio::biz::PortfolioBiz;
 use budget::manager::biz::portfolio::refresh::RefreshJob;
 use budget::manager::biz::BudgetBiz;
 use budget::manager::client::IdentityClient;
+use budget::manager::repository::fx_rates::FxRateService;
 use budget::manager::repository::portfolio::PortfolioRepository;
 use budget::manager::repository::BudgetRepository;
 use budget::pb::service::budget::budget_service_server::BudgetServiceServer;
@@ -56,11 +57,15 @@ async fn main() -> anyhow::Result<()> {
     // Wire Portfolio service in front of the same Budget repository pool.
     // The identity client and BudgetBiz are shared so role resolution uses
     // the same logic as the existing service.
-    let portfolio_repo = Arc::new(PortfolioRepository::new(
-        sqlx::MySqlPool::connect(&config.database_url)
+    let portfolio_pool = sqlx::MySqlPool::connect(&config.database_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open portfolio pool: {e}"))?;
+    let portfolio_repo = Arc::new(PortfolioRepository::new(portfolio_pool.clone()));
+    let _fx_svc = Arc::new(
+        FxRateService::new(portfolio_pool)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to open portfolio pool: {e}"))?,
-    ));
+            .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
+    );
     let portfolio_biz = Arc::new(PortfolioBiz::new(
         (*portfolio_repo).clone(),
         IdentityClient::from_channel(
