@@ -8,7 +8,8 @@ use std::sync::Arc;
 use budget::manager::biz::BudgetBiz;
 use budget::manager::biz::portfolio::biz::PortfolioBiz;
 use budget::manager::repository::portfolio::PortfolioRepository;
-use budget::converters::portfolio::{NewPortfolioAsset, NewOutboxEvent, AssetClassNew};
+use budget::converters::portfolio::{NewPortfolioAsset, NewOutboxEvent, AssetClassNew, NewPriceObservation, NewGoldLot, NewStockLot, NewCryptoLot, DbPortfolioAsset};
+use budget::manager::biz::portfolio::PriceSide;
 use budget::pb::service::budget::{AssetType, BudgetType};
 use async_trait::async_trait;
 use philand_notify::{Mailer, MailMessage, MailReceipt, MailerError};
@@ -304,5 +305,249 @@ async fn invest_crud_round_trip() {
         after.is_empty(),
         "list must be empty after delete, but got {} assets",
         after.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio multi-currency helpers
+// ---------------------------------------------------------------------------
+
+/// Insert a portfolio asset (root row only) and return the read-back DbPortfolioAsset.
+/// The caller is responsible for inserting the corresponding subtype row
+/// (gold_lots / stock_lots / crypto_lots) if the asset class is priceable.
+async fn seed_portfolio_asset(
+    pool: &sqlx::MySqlPool,
+    budget_id: String,
+    asset_class: AssetClassNew,
+    display_name: &str,
+    currency: &str,
+) -> DbPortfolioAsset {
+    let repo = PortfolioRepository::new(pool.clone());
+    let now = now_unix();
+    repo.insert_and_read_asset(NewPortfolioAsset {
+        id: None,
+        budget_id,
+        asset_class,
+        display_name: display_name.to_string(),
+        currency: currency.to_string(),
+        opened_on: now,
+        closed_on: None,
+        legacy_asset_id: None,
+        notes: None,
+        created_by: "test-user".to_string(),
+    })
+    .await
+    .expect("seed_portfolio_asset failed")
+}
+
+/// Insert a portfolio_gold_lots row for the given asset_id.
+async fn seed_portfolio_gold_lot(
+    pool: &sqlx::MySqlPool,
+    asset_id: &str,
+    quantity_original: &str,
+    purchase_price_per_unit_original: i64,
+    purchase_cost: i64,
+) {
+    let repo = PortfolioRepository::new(pool.clone());
+    let mut tx = repo.begin().await.expect("begin tx");
+    repo.insert_gold_lot(&mut tx, asset_id, &NewGoldLot {
+        provider: "TEST".to_string(),
+        gold_type: "sjc_9999".to_string(),
+        purity: "sjc_9999".to_string(),
+        form: "bar".to_string(),
+        quantity_original: quantity_original.to_string(),
+        unit: budget::manager::biz::portfolio::gold::GoldUnit::Chi,
+        purchase_price_per_unit_original,
+        purchase_cost,
+        fees: 0,
+        purchase_date: now_unix(),
+        notes: None,
+    })
+    .await
+    .expect("insert_gold_lot failed");
+    tx.commit().await.expect("commit failed");
+}
+
+/// Insert a portfolio_stock_lots row for the given asset_id.
+async fn seed_portfolio_stock_lot(
+    pool: &sqlx::MySqlPool,
+    asset_id: &str,
+    ticker: &str,
+    exchange: &str,
+    quantity_bought: &str,
+    buy_price_per_share: i64,
+    purchase_cost: i64,
+) {
+    let repo = PortfolioRepository::new(pool.clone());
+    let mut tx = repo.begin().await.expect("begin tx");
+    repo.insert_stock_lot(&mut tx, asset_id, &NewStockLot {
+        ticker: ticker.to_string(),
+        exchange: exchange.to_string(),
+        quantity_bought: quantity_bought.to_string(),
+        buy_price_per_share,
+        purchase_cost,
+        fees: 0,
+        purchase_date: now_unix(),
+        settlement_date: None,
+        notes: None,
+    })
+    .await
+    .expect("insert_stock_lot failed");
+    tx.commit().await.expect("commit failed");
+}
+
+/// Insert a portfolio_crypto_lots row for the given asset_id.
+async fn seed_portfolio_crypto_lot(
+    pool: &sqlx::MySqlPool,
+    asset_id: &str,
+    symbol: &str,
+    network: &str,
+    quantity_bought: &str,
+    buy_price_per_unit: i64,
+    purchase_cost: i64,
+) {
+    let repo = PortfolioRepository::new(pool.clone());
+    let mut tx = repo.begin().await.expect("begin tx");
+    repo.insert_crypto_lot(&mut tx, asset_id, &NewCryptoLot {
+        symbol: symbol.to_string(),
+        network: network.to_string(),
+        custody_wallet: "test-wallet".to_string(),
+        quantity_bought: quantity_bought.to_string(),
+        quantity_open: quantity_bought.to_string(),
+        buy_price_per_unit,
+        purchase_cost,
+        fees: 0,
+        purchase_date: now_unix(),
+        notes: None,
+    })
+    .await
+    .expect("insert_crypto_lot failed");
+    tx.commit().await.expect("commit failed");
+}
+
+/// Insert a price observation for the given portfolio asset.
+/// unit_price is in the asset's native currency (stored as-is in the DB).
+async fn seed_price(
+    pool: &sqlx::MySqlPool,
+    asset_id: String,
+    unit_price: i64,
+    currency: &str,
+) {
+    let repo = PortfolioRepository::new(pool.clone());
+    let mut tx = repo.begin().await.expect("begin tx");
+    let now = now_unix();
+    let idempotency_key = format!("manual:{now}:{asset_id}");
+    repo.insert_price_observation(&mut tx, &NewPriceObservation {
+        id: None,
+        asset_id,
+        provider: "manual".to_string(),
+        price_side: PriceSide::Mid,
+        unit_price,
+        currency: currency.to_string(),
+        observed_at: now,
+        source_reference: "".to_string(),
+        idempotency_key: Some(idempotency_key),
+        notes: None,
+    })
+    .await
+    .expect("insert_price_observation failed");
+    tx.commit().await.expect("commit failed");
+}
+
+// ---------------------------------------------------------------------------
+// Portfolio multi-currency lifecycle test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL; run with `--ignored`"]
+async fn portfolio_multi_currency_lifecycle() {
+    let url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
+    let pool = MySqlPool::connect(&url).await.expect("connect");
+
+    // Run migrations so the portfolio schema exists.
+    {
+        let mut m = sqlx::migrate!("./migrations");
+        m.set_ignore_missing(true);
+        if let Err(e) = m.run(&pool).await {
+            let msg = e.to_string();
+            let ignorable = msg.contains("VersionMismatch")
+                || msg.contains("partially applied")
+                || msg.contains("Duplicate column name")
+                || msg.contains("Duplicate key name")
+                || msg.contains("already exists");
+            if !ignorable {
+                eprintln!("migration error (will try to continue): {msg}");
+            }
+        }
+    }
+
+    // Set up business-layer objects (test-only, no real clients).
+    let budget_biz = BudgetBiz::test_only_no_clients().await;
+    let pbiz = PortfolioBiz::test_only_no_clients(Arc::new(budget_biz)).await;
+    let repo_pool = pbiz.repo.pool().clone();
+
+    // Seed a legacy budget (provides budget_id for portfolio assets).
+    let budget_id = seed_budget(&pool).await;
+
+    // --- GOLD (VND) ---
+    let gold = seed_portfolio_asset(
+        &repo_pool,
+        budget_id.clone(),
+        AssetClassNew::GoldLot,
+        "Test Gold",
+        "VND",
+    )
+    .await;
+    // Gold lot: 100 chi @ 7,500,000 VND/chi → current_value = 100 * 7_500_000 = 750_000_000
+    seed_portfolio_gold_lot(&repo_pool, &gold.id, "100", 7_500_000, 750_000_000).await;
+    seed_price(&repo_pool, gold.id.clone(), 7_500_000, "VND").await;
+
+    // --- STOCK AAPL (USD) ---
+    let stock = seed_portfolio_asset(
+        &repo_pool,
+        budget_id.clone(),
+        AssetClassNew::StockLot,
+        "AAPL",
+        "USD",
+    )
+    .await;
+    // Stock lot: 10 shares @ 150 USD/share → current_value = 10 * 150_00 = 150_000 (stored as cents)
+    seed_portfolio_stock_lot(&repo_pool, &stock.id, "AAPL", "NASDAQ", "10", 150_00, 150_000).await;
+    seed_price(&repo_pool, stock.id.clone(), 150_00, "USD").await;
+
+    // --- CRYPTO BTC (USD) ---
+    let btc = seed_portfolio_asset(
+        &repo_pool,
+        budget_id.clone(),
+        AssetClassNew::CryptoLot,
+        "BTC",
+        "USD",
+    )
+    .await;
+    // Crypto lot: 1 BTC @ 60,000 USD → current_value = 1 * 6000000000 = 6_000_000_000
+    seed_portfolio_crypto_lot(&repo_pool, &btc.id, "BTC", "bitcoin", "1", 6_000_000_000, 6_000_000_000).await;
+    seed_price(&repo_pool, btc.id.clone(), 6_000_000_000, "USD").await;
+
+    // Trigger price refresh: call get_portfolio_summary which recomputes valuations
+    // using the latest price observations for each asset.
+    let summary = pbiz
+        .get_portfolio_summary("test-user", &budget_id, None)
+        .await
+        .expect("get_portfolio_summary failed");
+
+    // Verify the summary contains all 3 assets and a positive total value.
+    // Note: prices are stored per-asset in their native currency; the summary
+    // sums them as-is (no FX conversion). The total reflects the raw sum of
+    // each asset's quantity × unit_price in its own currency.
+    assert!(
+        summary.total_current_value > 0,
+        "total_current_value must be positive; got {}",
+        summary.total_current_value
+    );
+    assert_eq!(
+        summary.assets.len(),
+        3,
+        "summary must contain exactly 3 valuated assets"
     );
 }
