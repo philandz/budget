@@ -551,3 +551,80 @@ async fn portfolio_multi_currency_lifecycle() {
         "summary must contain exactly 3 valuated assets"
     );
 }
+
+// ---------------------------------------------------------------------------
+// RefreshJob regression test
+// ---------------------------------------------------------------------------
+
+/// Seed a GoldLot portfolio asset in a given currency. Simpler variant that
+/// wraps the existing 5-arg seed_portfolio_asset.
+async fn seed_portfolio_asset_simple(pool: &MySqlPool, currency: &str) -> DbPortfolioAsset {
+    let budget_id = seed_budget(pool).await;
+    seed_portfolio_asset(pool, budget_id, AssetClassNew::GoldLot, "Test Gold", currency).await
+}
+
+/// Trigger one RefreshJob tick by constructing a RefreshJob from the pool and
+/// calling its test-only tick method.
+async fn trigger_refresh(pool: &MySqlPool) {
+    use budget::manager::biz::portfolio::refresh::RefreshJob;
+    let repo = Arc::new(PortfolioRepository::new(pool.clone()));
+    let job = RefreshJob::new(repo);
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("valid reqwest Client");
+    job.tick(&http).await.expect("tick failed");
+}
+
+/// Retrieve the latest price observation for an asset, if any.
+async fn get_latest_observation(pool: &MySqlPool, asset_id: &str) -> Option<budget::converters::portfolio::DbPriceObservation> {
+    let repo = PortfolioRepository::new(pool.clone());
+    let mut tx = repo.begin().await.expect("begin tx");
+    let result = repo.latest_price_observation(&mut tx, asset_id).await.expect("latest_price_observation failed");
+    tx.commit().await.expect("commit failed");
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires DATABASE_URL and a live price provider; run with `--ignored`"]
+async fn refresh_records_native_currency_not_vnd() {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
+    let pool = MySqlPool::connect(&url).await.expect("connect");
+
+    // Run migrations so the portfolio schema exists.
+    {
+        let mut m = sqlx::migrate!("./migrations");
+        m.set_ignore_missing(true);
+        if let Err(e) = m.run(&pool).await {
+            let msg = e.to_string();
+            let ignorable = msg.contains("VersionMismatch")
+                || msg.contains("partially applied")
+                || msg.contains("Duplicate column name")
+                || msg.contains("Duplicate key name")
+                || msg.contains("already exists");
+            if !ignorable {
+                eprintln!("migration error (will try to continue): {msg}");
+            }
+        }
+    }
+
+    // Seed a USD GoldLot so the refresh job fetches a price for it.
+    let asset = seed_portfolio_asset_simple(&pool, "USD").await;
+    seed_portfolio_gold_lot(&pool, &asset.id, "1", 7_500_000, 7_500_000).await;
+
+    // Trigger one refresh tick.
+    trigger_refresh(&pool).await;
+
+    // Verify the inserted observation has the asset's native currency (USD),
+    // not the previously hardcoded "VND".
+    let obs = get_latest_observation(&pool, &asset.id).await;
+    assert!(
+        obs.is_some(),
+        "refresh must have inserted a price observation for asset {}",
+        asset.id
+    );
+    assert_eq!(
+        obs.unwrap().currency, "USD",
+        "price observation currency must match asset native currency (USD), not hardcoded VND"
+    );
+}

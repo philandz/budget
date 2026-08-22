@@ -84,7 +84,7 @@ impl RefreshJob {
         }
     }
 
-    async fn tick(&self, http: &reqwest::Client) -> anyhow::Result<()> {
+    pub async fn tick(&self, http: &reqwest::Client) -> anyhow::Result<()> {
         // Skip the round-trip if only the noop provider is registered.
         // Each enabled provider would otherwise emit "no prices returned"
         // every interval, drowning the log in noise.
@@ -112,6 +112,11 @@ impl RefreshJob {
             tracing::debug!("refresh: no prices returned (no providers match)");
             return Ok(());
         }
+        // Build asset_id → currency lookup so price observations record
+        // the asset's native currency instead of hardcoding "VND".
+        let asset_currency: std::collections::HashMap<&str, &str> =
+            assets.iter().map(|a| (a.id.as_str(), a.currency.as_str())).collect();
+
         let mut tx = self.repo.begin().await?;
         let mut inserted = 0_usize;
         for price in &prices {
@@ -122,7 +127,11 @@ impl RefreshJob {
                 provider: price.provider.clone(),
                 price_side: convert_price_side(price.price_side),
                 unit_price: price.unit_price,
-                currency: "VND".into(),
+                currency: asset_currency
+                    .get(price.asset_id.as_str())
+                    .copied()
+                    .unwrap_or("VND")
+                    .into(),
                 observed_at: now,
                 source_reference: price.source_reference.clone(),
                 idempotency_key: Some(format!(
