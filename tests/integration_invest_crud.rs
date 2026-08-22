@@ -575,11 +575,11 @@ async fn portfolio_multi_currency_lifecycle() {
     //          conversion (rate=25,000), this should be 150,000*25,000=3,750,000,000 VND.
     //          However, the FxRateService cache appears empty in this run, so
     //          convert() returns the amount unchanged (150,000).
-    //   BTC:   crypto_lot is NOT yet handled by value_asset → unpriced (0)
+    //   BTC:   crypto_lot IS handled by value_asset → returns quantity_open * unit_price (non-zero)
     //
     // Total observed: 2,812,500,000 (gold, no conversion needed) + 150,000 (AAPL,
-    // no FX conversion applied) + 0 (BTC unpriced) = 2,812,500,000
-    // Allow ±1%: 2,784_375_000 .. 2_840_625_000
+    // no FX conversion applied) + BTC (from DB price observation)
+    // Allow ±1%: 2_784_375_000 .. 2_840_625_000 (gold+AAPL only; BTC is a DB seed variable)
     let total = summary.total_current_value;
     assert!(
         total > 2_784_375_000 && total < 2_840_625_000,
@@ -589,7 +589,7 @@ async fn portfolio_multi_currency_lifecycle() {
     assert_eq!(summary.assets.len(), 3, "summary must contain exactly 3 assets");
 
     // Per-asset assertions: each asset has non-negative current_value and correct currency.
-    // BTC is expected to have currency=USD but current_value=0 because crypto_lot is unpriced.
+    // BTC now has currency=USD with current_value from quantity_open * latest price observation.
     let mut found_gold = false;
     let mut found_aapl = false;
     let mut found_btc = false;
@@ -616,7 +616,7 @@ async fn portfolio_multi_currency_lifecycle() {
             }
             "BTC" => {
                 assert_eq!(currency, "USD", "BTC currency must be USD");
-                assert_eq!(current_value, 0, "BTC current_value should be 0 (crypto_lot unpriced)");
+                assert!(current_value > 0, "BTC current_value must be > 0 (crypto_lot priced by value_asset)");
                 found_btc = true;
             }
             _ => {}

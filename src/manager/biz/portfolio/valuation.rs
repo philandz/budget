@@ -173,6 +173,46 @@ impl PortfolioValuation {
                     quote_observed_at: obs.observed_at,
                 })
             }
+            "crypto_lot" => {
+                let sub = self
+                    .repo
+                    .get_crypto_lot(tx, &asset.id)
+                    .await
+                    .map_err(internal)?;
+                let Some(sub) = sub else {
+                    return Ok(Valuation::unpriced());
+                };
+                let obs = self
+                    .repo
+                    .latest_price_observation(tx, &asset.id)
+                    .await
+                    .map_err(internal)?;
+                let Some(obs) = obs else {
+                    return Ok(Valuation {
+                        current_value: sub.purchase_cost,
+                        open_cost_basis: sub.purchase_cost,
+                        realized_pnl: 0,
+                        unrealized_pnl: 0,
+                        accrued_interest: 0,
+                        freshness: PriceFreshness::Unpriced as i32,
+                        quote_observed_at: 0,
+                    });
+                };
+                let qty_open = parse_decimal(&sub.quantity_open).map_err(internal)?;
+                let qty_open_f = qty_open.to_string().parse::<f64>().unwrap_or(0.0);
+                let current_value = (qty_open_f * obs.unit_price as f64).round() as i64;
+                let freshness =
+                    PriceFreshness::from_age_seconds((today - obs.observed_at).max(0), true);
+                Ok(Valuation {
+                    current_value,
+                    open_cost_basis: sub.purchase_cost,
+                    realized_pnl: 0,
+                    unrealized_pnl: current_value - sub.purchase_cost,
+                    accrued_interest: 0,
+                    freshness: freshness as i32,
+                    quote_observed_at: obs.observed_at,
+                })
+            }
             _ => Ok(Valuation::unpriced()),
         }
     }
