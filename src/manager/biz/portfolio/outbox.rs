@@ -141,7 +141,8 @@ impl PortfolioBiz {
     /// One pass: fetch up to `batch_size` un-delivered rows, render,
     /// dispatch, and mark delivered. On error, increment `attempts` and
     /// set `next_attempt_at` based on backoff.
-    async fn drain_outbox_once(
+    #[doc(hidden)]
+    pub async fn drain_outbox_once(
         &self,
         mailer: &Arc<dyn Mailer>,
         telegram: Option<&TelegramDispatcher>,
@@ -242,6 +243,7 @@ impl PortfolioBiz {
         // We swallow duplicate (rows_affected = 0) so retries don't
         // double-send.
         let asset_id = row.asset_id.clone().unwrap_or_default();
+        let currency = fetch_asset_currency(self.repo.pool(), &asset_id).await;
         if !self
             .record_alert_dedup(&user_id, &asset_id, &row.event_type)
             .await?
@@ -299,7 +301,7 @@ impl PortfolioBiz {
                     budget_name,
                     asset_name,
                     principal_minor: principal,
-                    currency: "VND", // TODO: fetch from asset
+                    currency: &currency, // read from asset
                     maturity_date,
                     next_step_url: &asset_url,
                 })
@@ -329,7 +331,7 @@ impl PortfolioBiz {
                     old_asset_name: old_name,
                     new_asset_name: new_name,
                     principal_minor: principal,
-                    currency: "VND", // TODO: fetch from asset
+                    currency: &currency, // read from asset
                     new_maturity_date,
                     next_step_url: &asset_url,
                 })
@@ -355,7 +357,7 @@ impl PortfolioBiz {
                     asset_name,
                     ticker,
                     unit_price_minor: unit_price,
-                    currency: "VND", // TODO: fetch from asset
+                    currency: &currency, // read from asset
                     source,
                     portfolio_url: &portfolio_url,
                 })
@@ -539,6 +541,18 @@ fn extract_user_id(payload_json: &str) -> Option<String> {
     v.get("actor_user_id")
         .and_then(|x| x.as_str())
         .map(str::to_string)
+}
+
+/// Fetch the currency of a portfolio asset from the database.
+/// Falls back to "VND" if the asset is not found or the query fails.
+async fn fetch_asset_currency(pool: &sqlx::MySqlPool, asset_id: &str) -> String {
+    sqlx::query_scalar::<_, String>("SELECT currency FROM portfolio_assets WHERE id = ?")
+        .bind(asset_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "VND".to_string())
 }
 
 fn backoff_for(attempts: i32) -> i64 {
