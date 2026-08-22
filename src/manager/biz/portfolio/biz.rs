@@ -57,14 +57,20 @@ impl PortfolioBiz {
         PortfolioValuation::new(Arc::clone(&self.repo))
     }
 
-    /// Test-only constructor.
+    /// Test-only constructor. Creates its own FxRateService from DATABASE_URL so
+    /// callers do not need to wire it explicitly.
     #[doc(hidden)]
-    pub async fn test_only_no_clients(budget_biz: Arc<BudgetBiz>, fx_svc: Arc<FxRateService>) -> Self {
+    pub async fn test_only_no_clients(budget_biz: Arc<BudgetBiz>) -> Self {
         let pool = sqlx::MySqlPool::connect_lazy(
             &std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "mysql://root@127.0.0.1:3306/philand".into()),
         )
         .expect("invalid DATABASE_URL");
+        let fx_svc = Arc::new(
+            FxRateService::new(pool.clone())
+                .await
+                .expect("FxRateService::new failed — ensure FX rates are seeded in the DB"),
+        );
         Self {
             repo: Arc::new(PortfolioRepository::new(pool)),
             identity_client: Arc::new(tokio::sync::Mutex::new(
