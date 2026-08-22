@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to open portfolio pool: {e}"))?;
     let portfolio_repo = Arc::new(PortfolioRepository::new(portfolio_pool.clone()));
-    let _fx_svc = Arc::new(
+    let fx_svc = Arc::new(
         FxRateService::new(portfolio_pool)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}"))?
         ),
         biz.clone(),
+        fx_svc.clone(),
     ));
     let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
 

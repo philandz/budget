@@ -17,6 +17,7 @@ use crate::manager::biz::portfolio::{
     AssetStatus,
 };
 use crate::manager::client::IdentityClient;
+use crate::manager::repository::fx_rates::FxRateService;
 use crate::manager::repository::portfolio::PortfolioRepository;
 use crate::pb::service::budget::BudgetRole;
 use crate::pb::service::portfolio as pb;
@@ -28,6 +29,7 @@ pub struct PortfolioBiz {
     pub repo: Arc<PortfolioRepository>,
     pub identity_client: Arc<tokio::sync::Mutex<IdentityClient>>,
     pub budget_biz: Arc<BudgetBiz>,
+    pub fx_svc: Arc<FxRateService>,
 }
 
 impl PortfolioBiz {
@@ -35,11 +37,13 @@ impl PortfolioBiz {
         repo: PortfolioRepository,
         identity_client: IdentityClient,
         budget_biz: Arc<BudgetBiz>,
+        fx_svc: Arc<FxRateService>,
     ) -> Self {
         Self {
             repo: Arc::new(repo),
             identity_client: Arc::new(tokio::sync::Mutex::new(identity_client)),
             budget_biz,
+            fx_svc,
         }
     }
 
@@ -55,7 +59,7 @@ impl PortfolioBiz {
 
     /// Test-only constructor.
     #[doc(hidden)]
-    pub async fn test_only_no_clients(budget_biz: Arc<BudgetBiz>) -> Self {
+    pub async fn test_only_no_clients(budget_biz: Arc<BudgetBiz>, fx_svc: Arc<FxRateService>) -> Self {
         let pool = sqlx::MySqlPool::connect_lazy(
             &std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "mysql://root@127.0.0.1:3306/philand".into()),
@@ -67,6 +71,7 @@ impl PortfolioBiz {
                 IdentityClient::test_only_unreachable(),
             )),
             budget_biz,
+            fx_svc,
         }
     }
 
@@ -1101,12 +1106,32 @@ impl PortfolioBiz {
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioSummary, Status> {
         let valuated = self.list_valuated(user_id, budget_id, user_type).await?;
+
+        // Fetch budget base currency for FX conversion.
+        let mut tx = self.repo.begin().await.map_err(internal)?;
+        let base_currency: String = sqlx::query_scalar(
+            "SELECT currency FROM budgets WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(budget_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(internal)?
+        .unwrap_or_else(|| "VND".to_string());
+        tx.commit().await.map_err(internal)?;
+
         let mut total_value: i64 = 0;
         let mut total_cost: i64 = 0;
         let mut total_realized: i64 = 0;
         let mut total_unrealized: i64 = 0;
         for v in &valuated {
-            total_value += v.current_value;
+            // Convert each asset's current_value to base currency before summing.
+            let asset_currency = v
+                .asset
+                .as_ref()
+                .map(|a| a.currency.as_str())
+                .unwrap_or("VND");
+            let converted_value = self.fx_svc.convert(v.current_value, asset_currency, &base_currency);
+            total_value += converted_value;
             total_cost += v.open_cost_basis;
             total_realized += v.realized_pnl;
             total_unrealized += v.unrealized_pnl;
@@ -1126,7 +1151,7 @@ impl PortfolioBiz {
             total_realized_pnl: total_realized,
             total_unrealized_pnl: total_unrealized,
             total_return_pct,
-            currency: String::new(),
+            currency: base_currency,
             assets: valuated,
         })
     }
