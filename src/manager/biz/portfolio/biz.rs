@@ -2,7 +2,7 @@
 //!
 //! Coordinates `PortfolioRepository` with authorization, lifecycle
 //! enforcement, currency lock, and activity log writes. Valuation is
-//! delegated to a pure helper so it can be unit-tested without DB.
+//! delegated to `valuation.rs`; price snapshots to `snapshot.rs`.
 
 use std::sync::Arc;
 use tonic::Status;
@@ -11,9 +11,10 @@ use crate::converters::portfolio as pconv;
 use crate::manager::biz::portfolio::{
     fifo::{fifo_disposal_allocations, DisposalAllocation, Lot},
     gold::GoldUnit,
-    interest::{compound_accrued, simple_accrued, InterestMethod, PayoutType},
     lifecycle::{next_status, Transition},
-    AssetStatus, PriceFreshness,
+    snapshot::PortfolioSnapshot,
+    valuation::{today_business_date, PortfolioValuation},
+    AssetStatus,
 };
 use crate::manager::client::IdentityClient;
 use crate::manager::repository::portfolio::PortfolioRepository;
@@ -40,6 +41,16 @@ impl PortfolioBiz {
             identity_client: Arc::new(tokio::sync::Mutex::new(identity_client)),
             budget_biz,
         }
+    }
+
+    /// Returns the snapshot module for price observation operations.
+    pub fn snapshot(&self) -> PortfolioSnapshot {
+        PortfolioSnapshot::new(Arc::clone(&self.repo))
+    }
+
+    /// Returns the valuation module for asset value computations.
+    pub fn valuation(&self) -> PortfolioValuation {
+        PortfolioValuation::new(Arc::clone(&self.repo))
     }
 
     /// Test-only constructor.
@@ -184,47 +195,6 @@ impl PortfolioBiz {
             .map_err(internal)?;
         tx.commit().await.map_err(internal)?;
         Ok(rows.into_iter().map(pconv::map_portfolio_asset).collect())
-    }
-
-    /// Single-transaction list with valuation. Replaces the previous
-    /// pattern of calling `get_portfolio_summary` then slicing `.assets`
-    /// because that pattern triggered N+1 subtype queries per asset.
-    pub async fn list_valuated(
-        &self,
-        user_id: &str,
-        budget_id: &str,
-        user_type: Option<&str>,
-    ) -> Result<Vec<pb::ValuatedAsset>, Status> {
-        self.assert_member(budget_id, user_id, user_type).await?;
-        let mut tx = self.repo.begin().await.map_err(internal)?;
-        let assets = self
-            .repo
-            .list_assets_by_budget(&mut tx, budget_id)
-            .await
-            .map_err(internal)?;
-        let today = today_business_date();
-        let mut out = Vec::with_capacity(assets.len());
-        for asset in &assets {
-            let v = self.value_asset(&mut tx, asset, today).await?;
-            out.push(pb::ValuatedAsset {
-                asset: Some(pconv::map_portfolio_asset(asset.clone())),
-                current_value: v.current_value,
-                open_cost_basis: v.open_cost_basis,
-                realized_pnl: v.realized_pnl,
-                unrealized_pnl: v.unrealized_pnl,
-                accrued_interest: v.accrued_interest,
-                return_pct: if v.open_cost_basis > 0 {
-                    (v.unrealized_pnl as f64 / v.open_cost_basis as f64) * 100.0
-                } else {
-                    0.0
-                },
-                freshness: v.freshness as i32,
-                quote_observed_at: v.quote_observed_at,
-                formula_version: "v1-actual-365".to_string(),
-            });
-        }
-        tx.commit().await.map_err(internal)?;
-        Ok(out)
     }
 
     pub async fn get_asset(
@@ -883,7 +853,7 @@ impl PortfolioBiz {
     }
 
     // -----------------------------------------------------------------------
-    // Price observations
+    // Price observations — delegate to snapshot module
     // -----------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
@@ -904,50 +874,22 @@ impl PortfolioBiz {
     ) -> Result<pb::PriceObservation, Status> {
         self.assert_min_role(budget_id, user_id, BudgetRole::Contributor, user_type)
             .await?;
-        if unit_price < 0 {
-            return Err(Status::invalid_argument("unit_price must be >= 0"));
-        }
         let mut tx = self.repo.begin().await.map_err(internal)?;
-        if let Some(key) = idempotency_key {
-            if !key.is_empty() {
-                if let Some(existing) = self
-                    .repo
-                    .get_price_observation_by_idempotency(&mut tx, asset_id, key)
-                    .await
-                    .map_err(internal)?
-                {
-                    tx.commit().await.map_err(internal)?;
-                    return Ok(pconv::map_price_observation(existing));
-                }
-            }
-        }
-        let new = pconv::NewPriceObservation {
-            id: None,
-            asset_id: asset_id.to_string(),
-            provider: if provider.is_empty() {
-                "manual".to_string()
-            } else {
-                provider.to_string()
-            },
-            price_side: parse_price_side(price_side),
-            unit_price,
-            currency: currency.to_string(),
-            observed_at: if observed_at == 0 {
-                now_unix()
-            } else {
-                observed_at
-            },
-            source_reference: source_reference.to_string(),
-            idempotency_key: idempotency_key
-                .filter(|k| !k.is_empty())
-                .map(str::to_string),
-            notes: notes.map(str::to_string),
-        };
         let obs = self
-            .repo
-            .insert_price_observation(&mut tx, &new)
-            .await
-            .map_err(internal)?;
+            .snapshot()
+            .record_price_observation(
+                &mut tx,
+                asset_id,
+                provider,
+                price_side,
+                unit_price,
+                currency,
+                observed_at,
+                source_reference,
+                idempotency_key,
+                notes,
+            )
+            .await?;
         self.append_activity(
             &mut tx,
             budget_id,
@@ -959,7 +901,7 @@ impl PortfolioBiz {
         )
         .await?;
         tx.commit().await.map_err(internal)?;
-        Ok(pconv::map_price_observation(obs))
+        Ok(obs)
     }
 
     pub async fn list_price_observations(
@@ -972,13 +914,9 @@ impl PortfolioBiz {
     ) -> Result<Vec<pb::PriceObservation>, Status> {
         self.assert_member(budget_id, user_id, user_type).await?;
         let mut tx = self.repo.begin().await.map_err(internal)?;
-        let rows = self
-            .repo
+        self.snapshot()
             .list_price_observations(&mut tx, asset_id, limit)
             .await
-            .map_err(internal)?;
-        tx.commit().await.map_err(internal)?;
-        Ok(rows.into_iter().map(pconv::map_price_observation).collect())
     }
 
     pub async fn list_asset_activity(
@@ -991,13 +929,9 @@ impl PortfolioBiz {
     ) -> Result<Vec<pb::PortfolioActivity>, Status> {
         self.assert_member(budget_id, user_id, user_type).await?;
         let mut tx = self.repo.begin().await.map_err(internal)?;
-        let rows = self
-            .repo
-            .list_activities(&mut tx, asset_id, limit)
+        self.snapshot()
+            .list_asset_activity(&mut tx, asset_id, limit)
             .await
-            .map_err(internal)?;
-        tx.commit().await.map_err(internal)?;
-        Ok(rows.into_iter().map(pconv::map_activity).collect())
     }
 
     // -----------------------------------------------------------------------
@@ -1113,8 +1047,52 @@ impl PortfolioBiz {
     }
 
     // -----------------------------------------------------------------------
-    // Portfolio summary with per-asset valuation
+    // Portfolio valuation — delegate to valuation module
     // -----------------------------------------------------------------------
+
+    /// Single-transaction list with valuation. Replaces the previous
+    /// pattern of calling `get_portfolio_summary` then slicing `.assets`
+    /// because that pattern triggered N+1 subtype queries per asset.
+    pub async fn list_valuated(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<Vec<pb::ValuatedAsset>, Status> {
+        self.assert_member(budget_id, user_id, user_type).await?;
+        let mut tx = self.repo.begin().await.map_err(internal)?;
+        let assets = self
+            .repo
+            .list_assets_by_budget(&mut tx, budget_id)
+            .await
+            .map_err(internal)?;
+        let today = today_business_date();
+        let mut out = Vec::with_capacity(assets.len());
+        for asset in &assets {
+            let v = self
+                .valuation()
+                .value_asset(&mut tx, asset, today)
+                .await?;
+            out.push(pb::ValuatedAsset {
+                asset: Some(pconv::map_portfolio_asset(asset.clone())),
+                current_value: v.current_value,
+                open_cost_basis: v.open_cost_basis,
+                realized_pnl: v.realized_pnl,
+                unrealized_pnl: v.unrealized_pnl,
+                accrued_interest: v.accrued_interest,
+                return_pct: if v.open_cost_basis > 0 {
+                    (v.unrealized_pnl as f64 / v.open_cost_basis as f64) * 100.0
+                } else {
+                    0.0
+                },
+                freshness: v.freshness as i32,
+                quote_observed_at: v.quote_observed_at,
+                formula_version: "v1-actual-365".to_string(),
+            });
+        }
+        tx.commit().await.map_err(internal)?;
+        Ok(out)
+    }
 
     pub async fn get_portfolio_summary(
         &self,
@@ -1153,223 +1131,6 @@ impl PortfolioBiz {
         })
     }
 
-    /// Per-asset valuation. Returns current_value, open_cost_basis,
-    /// realized_pnl, unrealized_pnl, accrued_interest, freshness,
-    /// quote_observed_at.
-    async fn value_asset(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
-        asset: &pconv::DbPortfolioAsset,
-        today: i64,
-    ) -> Result<Valuation, Status> {
-        match asset.asset_class.as_str() {
-            "savings_account" => {
-                let sub = self
-                    .repo
-                    .get_savings_account(tx, &asset.id)
-                    .await
-                    .map_err(internal)?;
-                let Some(sub) = sub else {
-                    return Ok(Valuation::unpriced());
-                };
-                let rate = parse_decimal(&sub.annual_rate).map_err(internal)?;
-                let days = (today - sub.balance_as_of).max(0);
-                let total = match InterestMethod::from_db(&sub.interest_method) {
-                    InterestMethod::Simple => simple_accrued(sub.current_balance, rate, days),
-                    InterestMethod::Compound => compound_accrued(sub.current_balance, rate, days),
-                };
-                let accrued = total.minor().saturating_sub(sub.current_balance);
-                let current_value = sub.current_balance + accrued;
-                Ok(Valuation {
-                    current_value,
-                    open_cost_basis: sub.current_balance,
-                    realized_pnl: 0,
-                    unrealized_pnl: current_value - sub.current_balance,
-                    accrued_interest: accrued,
-                    freshness: PriceFreshness::Unpriced as i32,
-                    quote_observed_at: 0,
-                })
-            }
-            "fixed_deposit" => {
-                let sub = self
-                    .repo
-                    .get_fixed_deposit(tx, &asset.id)
-                    .await
-                    .map_err(internal)?;
-                let Some(sub) = sub else {
-                    return Ok(Valuation::unpriced());
-                };
-                let rate = parse_decimal(&sub.annual_rate).map_err(internal)?;
-                let eff = today.min(sub.maturity_date);
-                let days = (eff - sub.deposit_date).max(0);
-                let total = match InterestMethod::from_db(&sub.interest_method) {
-                    InterestMethod::Simple => simple_accrued(sub.principal, rate, days),
-                    InterestMethod::Compound => compound_accrued(sub.principal, rate, days),
-                };
-                let accrued = total.minor().saturating_sub(sub.principal);
-                let current_value = sub.principal + accrued;
-                Ok(Valuation {
-                    current_value,
-                    open_cost_basis: sub.principal,
-                    realized_pnl: 0,
-                    unrealized_pnl: current_value - sub.principal,
-                    accrued_interest: accrued,
-                    freshness: PriceFreshness::Unpriced as i32,
-                    quote_observed_at: 0,
-                })
-            }
-            "gold_lot" => {
-                let sub = self
-                    .repo
-                    .get_gold_lot(tx, &asset.id)
-                    .await
-                    .map_err(internal)?;
-                let Some(sub) = sub else {
-                    return Ok(Valuation::unpriced());
-                };
-                let obs = self
-                    .repo
-                    .latest_price_observation(tx, &asset.id)
-                    .await
-                    .map_err(internal)?;
-                let Some(obs) = obs else {
-                    return Ok(Valuation {
-                        current_value: sub.purchase_cost,
-                        open_cost_basis: sub.purchase_cost,
-                        realized_pnl: 0,
-                        unrealized_pnl: 0,
-                        accrued_interest: 0,
-                        freshness: PriceFreshness::Unpriced as i32,
-                        quote_observed_at: 0,
-                    });
-                };
-                let grams_f = parse_decimal(&sub.quantity_grams)
-                    .map_err(internal)?
-                    .to_string()
-                    .parse::<f64>()
-                    .unwrap_or(0.0);
-                let current_value = (grams_f * obs.unit_price as f64).round() as i64;
-                let freshness =
-                    PriceFreshness::from_age_seconds((today - obs.observed_at).max(0), true);
-                Ok(Valuation {
-                    current_value,
-                    open_cost_basis: sub.purchase_cost,
-                    realized_pnl: 0,
-                    unrealized_pnl: current_value - sub.purchase_cost,
-                    accrued_interest: 0,
-                    freshness: freshness as i32,
-                    quote_observed_at: obs.observed_at,
-                })
-            }
-            "stock_lot" => {
-                let sub = self
-                    .repo
-                    .get_stock_lot(tx, &asset.id)
-                    .await
-                    .map_err(internal)?;
-                let Some(sub) = sub else {
-                    return Ok(Valuation::unpriced());
-                };
-                let qty_open = parse_decimal(&sub.quantity_open).map_err(internal)?;
-                let qty_bought = parse_decimal(&sub.quantity_bought).map_err(internal)?;
-                let sold_qty = qty_bought - qty_open;
-                let sold_f = sold_qty.to_string().parse::<f64>().unwrap_or(0.0);
-                let open_cost_basis = (sold_f * sub.buy_price_per_share as f64).round() as i64;
-                let obs = self
-                    .repo
-                    .latest_price_observation(tx, &asset.id)
-                    .await
-                    .map_err(internal)?;
-                let Some(obs) = obs else {
-                    return Ok(Valuation {
-                        current_value: open_cost_basis,
-                        open_cost_basis,
-                        realized_pnl: 0,
-                        unrealized_pnl: 0,
-                        accrued_interest: 0,
-                        freshness: PriceFreshness::Unpriced as i32,
-                        quote_observed_at: 0,
-                    });
-                };
-                let qty_open_f = qty_open.to_string().parse::<f64>().unwrap_or(0.0);
-                let current_value = (qty_open_f * obs.unit_price as f64).round() as i64;
-                let freshness =
-                    PriceFreshness::from_age_seconds((today - obs.observed_at).max(0), true);
-                Ok(Valuation {
-                    current_value,
-                    open_cost_basis,
-                    realized_pnl: 0,
-                    unrealized_pnl: current_value - open_cost_basis,
-                    accrued_interest: 0,
-                    freshness: freshness as i32,
-                    quote_observed_at: obs.observed_at,
-                })
-            }
-            _ => Ok(Valuation::unpriced()),
-        }
-    }
-}
-
-struct Valuation {
-    current_value: i64,
-    open_cost_basis: i64,
-    realized_pnl: i64,
-    unrealized_pnl: i64,
-    accrued_interest: i64,
-    freshness: i32,
-    quote_observed_at: i64,
-}
-
-impl Valuation {
-    fn unpriced() -> Self {
-        Self {
-            current_value: 0,
-            open_cost_basis: 0,
-            realized_pnl: 0,
-            unrealized_pnl: 0,
-            accrued_interest: 0,
-            freshness: PriceFreshness::Unpriced as i32,
-            quote_observed_at: 0,
-        }
-    }
-}
-
-fn internal<E: ToString>(e: E) -> Status {
-    Status::internal(e.to_string())
-}
-
-fn parse_decimal(value: &str) -> Result<rust_decimal::Decimal, Status> {
-    use std::str::FromStr;
-    rust_decimal::Decimal::from_str(value)
-        .map_err(|_| Status::invalid_argument(format!("invalid decimal: {value}")))
-}
-
-fn parse_price_side(s: &str) -> crate::manager::biz::portfolio::PriceSide {
-    match s {
-        "bid" => crate::manager::biz::portfolio::PriceSide::Bid,
-        "ask" => crate::manager::biz::portfolio::PriceSide::Ask,
-        _ => crate::manager::biz::portfolio::PriceSide::Mid,
-    }
-}
-
-fn today_business_date() -> i64 {
-    let now_utc = chrono::Utc::now();
-    let ict = now_utc + chrono::Duration::hours(7);
-    ict.timestamp() - (ict.timestamp() % 86_400)
-}
-
-// Keep this around to silence unused warnings on helper enums used via trait.
-#[allow(dead_code)]
-fn _silence_unused() {
-    let _: PayoutType = PayoutType::AtMaturity;
-    let _: DisposalAllocation = DisposalAllocation {
-        lot_id: String::new(),
-        quantity: rust_decimal::Decimal::ZERO,
-        cost_basis_minor: 0,
-    };
-}
-
-impl PortfolioBiz {
     /// Backfill counter. The SQL migration `20260802000001_backfill_portfolio.sql`
     /// performs the actual copy from `invest_assets` into `portfolio_*`.
     /// This RPC returns the count of rows that the migration produced,
@@ -1388,6 +1149,26 @@ impl PortfolioBiz {
         tx.commit().await.map_err(internal)?;
         Ok(count as i32)
     }
+}
+
+fn internal<E: ToString>(e: E) -> Status {
+    Status::internal(e.to_string())
+}
+
+fn parse_decimal(value: &str) -> Result<rust_decimal::Decimal, Status> {
+    use std::str::FromStr;
+    rust_decimal::Decimal::from_str(value)
+        .map_err(|_| Status::invalid_argument(format!("invalid decimal: {value}")))
+}
+
+// Keep this around to silence unused warnings on helper enums used via trait.
+#[allow(dead_code)]
+fn _silence_unused() {
+    let _: DisposalAllocation = DisposalAllocation {
+        lot_id: String::new(),
+        quantity: rust_decimal::Decimal::ZERO,
+        cost_basis_minor: 0,
+    };
 }
 
 #[cfg(test)]

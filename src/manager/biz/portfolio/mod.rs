@@ -16,9 +16,12 @@ pub mod outbox;
 pub mod providers;
 pub mod quantity;
 pub mod rate;
+pub mod rebalance;
 pub mod refresh;
 pub mod rollover;
+pub mod snapshot;
 pub mod transfers;
+pub mod valuation;
 
 pub use fifo::{fifo_disposal_allocations, DisposalAllocation, Lot};
 pub use gold::{grams_from_quantity, GoldUnit};
@@ -29,6 +32,8 @@ pub use lifecycle::{next_status, LifecycleError, Transition};
 pub use money::Money;
 pub use quantity::Quantity;
 pub use rate::Rate;
+pub use snapshot::PortfolioSnapshot;
+pub use valuation::{today_business_date, PortfolioValuation, Valuation};
 
 use crate::pb::service::portfolio as pb;
 
