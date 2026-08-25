@@ -38,6 +38,7 @@ philand_random     = { package = "random",      path = "../libs/random" }
 philand_validator  = { package = "validator",   path = "../libs/validator" }
 philand_notify     = { package = "notify",       path = "../libs/notify" }
 rust_decimal      = { version = "1", features = ["serde-with-str"] }
+metrics-exporter-prometheus = "0.15"
 
 [dev-dependencies]
 serial_test = "3"

@@ -39,6 +39,12 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to init repository: {e}"))?;
     tracing::info!("Storage initialized");
 
+    // Install metrics recorder and spawn warn task.
+    let metrics_handle = philand_storage::metrics::install_recorder().await?;
+    tokio::spawn(philand_storage::metrics::spawn_warn_task(
+        philand_configs::MetricsConfig::from_env().acquire_warn_p99_ms,
+    ));
+
     if let Err(e) = config.register_consul().await {
         tracing::warn!("Consul registration failed: {e}. Continuing without Consul.");
     }
@@ -91,7 +97,9 @@ async fn main() -> anyhow::Result<()> {
 
     // HTTP server (health only — business routes served via gRPC through gateway)
     let http_addr: SocketAddr = format!("{}:{}", config.http_host, config.http_port).parse()?;
-    let http_app = Router::new().route("/health", get(health_check));
+    let http_app = Router::new()
+        .route("/health", get(health_check))
+        .route("/metrics", get(move || async move { metrics_handle.render() }));
     let http_listener = tokio::net::TcpListener::bind(http_addr).await?;
     tracing::info!("HTTP server listening on {}", http_addr);
 
