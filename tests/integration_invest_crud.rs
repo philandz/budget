@@ -5,14 +5,17 @@
 use sqlx::MySqlPool;
 use std::sync::Arc;
 
-use budget::manager::biz::BudgetBiz;
-use budget::manager::biz::portfolio::biz::PortfolioBiz;
-use budget::manager::repository::portfolio::PortfolioRepository;
-use budget::converters::portfolio::{NewPortfolioAsset, NewOutboxEvent, AssetClassNew, NewPriceObservation, NewGoldLot, NewStockLot, NewCryptoLot, DbPortfolioAsset};
-use budget::manager::biz::portfolio::PriceSide;
-use budget::pb::service::budget::{AssetType, BudgetType};
 use async_trait::async_trait;
-use philand_notify::{Mailer, MailMessage, MailReceipt, MailerError};
+use budget::converters::portfolio::{
+    AssetClassNew, DbPortfolioAsset, NewCryptoLot, NewGoldLot, NewOutboxEvent, NewPortfolioAsset,
+    NewPriceObservation, NewStockLot,
+};
+use budget::manager::biz::portfolio::biz::PortfolioBiz;
+use budget::manager::biz::portfolio::PriceSide;
+use budget::manager::biz::BudgetBiz;
+use budget::manager::repository::portfolio::PortfolioRepository;
+use budget::pb::service::budget::{AssetType, BudgetType};
+use philand_notify::{MailMessage, MailReceipt, Mailer, MailerError};
 use philand_time::now_unix;
 
 /// A mailer that captures the last message so we can assert on it.
@@ -35,7 +38,9 @@ impl CapturingMailer {
 
 #[async_trait]
 impl Mailer for CapturingMailer {
-    fn provider_name(&self) -> &'static str { "capturing" }
+    fn provider_name(&self) -> &'static str {
+        "capturing"
+    }
 
     async fn send(&self, msg: MailMessage) -> Result<MailReceipt, MailerError> {
         let _ = self.last.lock().unwrap().insert(msg.clone());
@@ -47,18 +52,21 @@ impl Mailer for CapturingMailer {
 async fn seed_asset(pool: &MySqlPool, currency: &str) -> String {
     let repo = PortfolioRepository::new(pool.clone());
     let now = now_unix();
-    let asset = repo.insert_and_read_asset(NewPortfolioAsset {
-        id: None,
-        budget_id: "budget-test-1".to_string(),
-        asset_class: AssetClassNew::FixedDeposit,
-        display_name: "Test FD".to_string(),
-        currency: currency.to_string(),
-        opened_on: now,
-        closed_on: None,
-        legacy_asset_id: None,
-        notes: None,
-        created_by: "test-user".to_string(),
-    }).await.expect("seed_asset failed");
+    let asset = repo
+        .insert_and_read_asset(NewPortfolioAsset {
+            id: None,
+            budget_id: "budget-test-1".to_string(),
+            asset_class: AssetClassNew::FixedDeposit,
+            display_name: "Test FD".to_string(),
+            currency: currency.to_string(),
+            opened_on: now,
+            closed_on: None,
+            legacy_asset_id: None,
+            notes: None,
+            created_by: "test-user".to_string(),
+        })
+        .await
+        .expect("seed_asset failed");
     asset.id
 }
 
@@ -78,7 +86,9 @@ async fn trigger_outbox_event(pool: &MySqlPool, asset_id: &str) {
         ),
         enqueued_at: now_unix(),
     };
-    repo.insert_outbox(&mut tx, &evt).await.expect("insert_outbox failed");
+    repo.insert_outbox(&mut tx, &evt)
+        .await
+        .expect("insert_outbox failed");
     tx.commit().await.expect("commit failed");
 }
 
@@ -151,7 +161,13 @@ async fn make_repo() -> budget::manager::repository::BudgetRepository {
 async fn seed_budget(_pool: &MySqlPool) -> String {
     let repo = make_repo().await;
     let budget = repo
-        .create_budget("test-org", "CRUD Round-Trip Test Budget", BudgetType::Standard, "VND", "test-user")
+        .create_budget(
+            "test-org",
+            "CRUD Round-Trip Test Budget",
+            BudgetType::Standard,
+            "VND",
+            "test-user",
+        )
         .await
         .expect("seed_budget failed");
     budget.id
@@ -171,20 +187,20 @@ async fn create_asset(
         budget::converters::asset_type_to_db(asset_type),
         name,
         "test-user",
-        Some(10_000_000),        // principal: 10M VND
-        Some(0.05),              // annual_rate: 5%
-        Some("simple"),         // interest_type
-        Some("2024-01-01"),     // start_date
-        Some("2025-01-01"),     // maturity_date
-        Some("Test Bank"),      // bank_name
-        Some(quantity),          // quantity
-        Some("shares"),          // unit
-        Some(100_000),           // cost_basis_per_unit: 100k VND/share
-        Some("AAPL"),           // ticker
-        Some("NASDAQ"),         // exchange
-        Some(150_000),          // avg_cost_per_share: 150k VND
-        Some("2024-01-15"),     // purchase_date
-        Some("Test notes"),     // notes
+        Some(10_000_000),   // principal: 10M VND
+        Some(0.05),         // annual_rate: 5%
+        Some("simple"),     // interest_type
+        Some("2024-01-01"), // start_date
+        Some("2025-01-01"), // maturity_date
+        Some("Test Bank"),  // bank_name
+        Some(quantity),     // quantity
+        Some("shares"),     // unit
+        Some(100_000),      // cost_basis_per_unit: 100k VND/share
+        Some("AAPL"),       // ticker
+        Some("NASDAQ"),     // exchange
+        Some(150_000),      // avg_cost_per_share: 150k VND
+        Some("2024-01-15"), // purchase_date
+        Some("Test notes"), // notes
     )
     .await
     .expect("create_asset failed")
@@ -208,15 +224,15 @@ async fn update_asset(
     let repo = make_repo().await;
     repo.update_invest_asset(
         &asset_id,
-        None,                   // name: unchanged
-        None,                   // annual_rate: unchanged
-        None,                   // maturity_date: unchanged
-        None,                   // bank_name: unchanged
-        Some(new_quantity),     // quantity: updated
-        None,                   // unit: unchanged
-        None,                   // cost_basis_per_unit: unchanged
-        None,                   // avg_cost_per_share: unchanged
-        None,                   // notes: unchanged
+        None,               // name: unchanged
+        None,               // annual_rate: unchanged
+        None,               // maturity_date: unchanged
+        None,               // bank_name: unchanged
+        Some(new_quantity), // quantity: updated
+        None,               // unit: unchanged
+        None,               // cost_basis_per_unit: unchanged
+        None,               // avg_cost_per_share: unchanged
+        None,               // notes: unchanged
     )
     .await
     .expect("update_asset failed")
@@ -248,8 +264,7 @@ async fn delete_asset(_pool: &MySqlPool, asset_id: String) {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL; run with `--ignored`"]
 async fn invest_crud_round_trip() {
-    let url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
     let pool = MySqlPool::connect(&url).await.expect("connect");
 
     // Run migrations so the schema exists.
@@ -275,7 +290,10 @@ async fn invest_crud_round_trip() {
     // Create — insert a stock investment.
     let asset = create_asset(&pool, budget_id.clone(), "AAPL", AssetType::Stock, 10.0).await;
     assert_eq!(asset.name, "AAPL", "created asset name must match");
-    assert_eq!(asset.budget_id, budget_id, "asset must belong to seeded budget");
+    assert_eq!(
+        asset.budget_id, budget_id,
+        "asset must belong to seeded budget"
+    );
 
     // Read — fetch the asset by id and verify it matches.
     let got = get_asset(&pool, asset.id.clone()).await;
@@ -285,16 +303,19 @@ async fn invest_crud_round_trip() {
 
     // Update — change quantity from 10 to 15.
     let updated = update_asset(&pool, asset.id.clone(), "quantity", 15.0).await;
-    assert_eq!(
-        updated.quantity,
-        Some(15.0),
-        "updated quantity must be 15"
-    );
+    assert_eq!(updated.quantity, Some(15.0), "updated quantity must be 15");
 
     // List — budget should now have 1 asset.
     let list = list_assets(&pool, budget_id.clone()).await;
-    assert_eq!(list.len(), 1, "list must return exactly 1 asset after create");
-    assert_eq!(list[0].id, asset.id, "listed asset must be our created asset");
+    assert_eq!(
+        list.len(),
+        1,
+        "list must return exactly 1 asset after create"
+    );
+    assert_eq!(
+        list[0].id, asset.id,
+        "listed asset must be our created asset"
+    );
 
     // Delete — soft-delete the asset.
     delete_asset(&pool, asset.id.clone()).await;
@@ -350,19 +371,23 @@ async fn seed_portfolio_gold_lot(
 ) {
     let repo = PortfolioRepository::new(pool.clone());
     let mut tx = repo.begin().await.expect("begin tx");
-    repo.insert_gold_lot(&mut tx, asset_id, &NewGoldLot {
-        provider: "TEST".to_string(),
-        gold_type: "sjc_9999".to_string(),
-        purity: "sjc_9999".to_string(),
-        form: "bar".to_string(),
-        quantity_original: quantity_original.to_string(),
-        unit: budget::manager::biz::portfolio::gold::GoldUnit::Chi,
-        purchase_price_per_unit_original,
-        purchase_cost,
-        fees: 0,
-        purchase_date: now_unix(),
-        notes: None,
-    })
+    repo.insert_gold_lot(
+        &mut tx,
+        asset_id,
+        &NewGoldLot {
+            provider: "TEST".to_string(),
+            gold_type: "sjc_9999".to_string(),
+            purity: "sjc_9999".to_string(),
+            form: "bar".to_string(),
+            quantity_original: quantity_original.to_string(),
+            unit: budget::manager::biz::portfolio::gold::GoldUnit::Chi,
+            purchase_price_per_unit_original,
+            purchase_cost,
+            fees: 0,
+            purchase_date: now_unix(),
+            notes: None,
+        },
+    )
     .await
     .expect("insert_gold_lot failed");
     tx.commit().await.expect("commit failed");
@@ -380,17 +405,21 @@ async fn seed_portfolio_stock_lot(
 ) {
     let repo = PortfolioRepository::new(pool.clone());
     let mut tx = repo.begin().await.expect("begin tx");
-    repo.insert_stock_lot(&mut tx, asset_id, &NewStockLot {
-        ticker: ticker.to_string(),
-        exchange: exchange.to_string(),
-        quantity_bought: quantity_bought.to_string(),
-        buy_price_per_share,
-        purchase_cost,
-        fees: 0,
-        purchase_date: now_unix(),
-        settlement_date: None,
-        notes: None,
-    })
+    repo.insert_stock_lot(
+        &mut tx,
+        asset_id,
+        &NewStockLot {
+            ticker: ticker.to_string(),
+            exchange: exchange.to_string(),
+            quantity_bought: quantity_bought.to_string(),
+            buy_price_per_share,
+            purchase_cost,
+            fees: 0,
+            purchase_date: now_unix(),
+            settlement_date: None,
+            notes: None,
+        },
+    )
     .await
     .expect("insert_stock_lot failed");
     tx.commit().await.expect("commit failed");
@@ -408,18 +437,22 @@ async fn seed_portfolio_crypto_lot(
 ) {
     let repo = PortfolioRepository::new(pool.clone());
     let mut tx = repo.begin().await.expect("begin tx");
-    repo.insert_crypto_lot(&mut tx, asset_id, &NewCryptoLot {
-        symbol: symbol.to_string(),
-        network: network.to_string(),
-        custody_wallet: "test-wallet".to_string(),
-        quantity_bought: quantity_bought.to_string(),
-        quantity_open: quantity_bought.to_string(),
-        buy_price_per_unit,
-        purchase_cost,
-        fees: 0,
-        purchase_date: now_unix(),
-        notes: None,
-    })
+    repo.insert_crypto_lot(
+        &mut tx,
+        asset_id,
+        &NewCryptoLot {
+            symbol: symbol.to_string(),
+            network: network.to_string(),
+            custody_wallet: "test-wallet".to_string(),
+            quantity_bought: quantity_bought.to_string(),
+            quantity_open: quantity_bought.to_string(),
+            buy_price_per_unit,
+            purchase_cost,
+            fees: 0,
+            purchase_date: now_unix(),
+            notes: None,
+        },
+    )
     .await
     .expect("insert_crypto_lot failed");
     tx.commit().await.expect("commit failed");
@@ -447,28 +480,26 @@ async fn seed_fx_rate(pool: &sqlx::MySqlPool, from: &str, to: &str, rate: i64) {
 
 /// Insert a price observation for the given portfolio asset.
 /// unit_price is in the asset's native currency (stored as-is in the DB).
-async fn seed_price(
-    pool: &sqlx::MySqlPool,
-    asset_id: String,
-    unit_price: i64,
-    currency: &str,
-) {
+async fn seed_price(pool: &sqlx::MySqlPool, asset_id: String, unit_price: i64, currency: &str) {
     let repo = PortfolioRepository::new(pool.clone());
     let mut tx = repo.begin().await.expect("begin tx");
     let now = now_unix();
     let idempotency_key = format!("manual:{now}:{asset_id}");
-    repo.insert_price_observation(&mut tx, &NewPriceObservation {
-        id: None,
-        asset_id,
-        provider: "manual".to_string(),
-        price_side: PriceSide::Mid,
-        unit_price,
-        currency: currency.to_string(),
-        observed_at: now,
-        source_reference: "".to_string(),
-        idempotency_key: Some(idempotency_key),
-        notes: None,
-    })
+    repo.insert_price_observation(
+        &mut tx,
+        &NewPriceObservation {
+            id: None,
+            asset_id,
+            provider: "manual".to_string(),
+            price_side: PriceSide::Mid,
+            unit_price,
+            currency: currency.to_string(),
+            observed_at: now,
+            source_reference: "".to_string(),
+            idempotency_key: Some(idempotency_key),
+            notes: None,
+        },
+    )
     .await
     .expect("insert_price_observation failed");
     tx.commit().await.expect("commit failed");
@@ -481,8 +512,7 @@ async fn seed_price(
 #[tokio::test]
 #[ignore = "requires DATABASE_URL; run with `--ignored`"]
 async fn portfolio_multi_currency_lifecycle() {
-    let url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
     let pool = MySqlPool::connect(&url).await.expect("connect");
 
     // Run migrations so the portfolio schema exists.
@@ -540,7 +570,10 @@ async fn portfolio_multi_currency_lifecycle() {
     )
     .await;
     // Stock lot: 10 shares @ 150 USD/share → current_value = 10 * 150_00 = 150_000 (stored as cents)
-    seed_portfolio_stock_lot(&repo_pool, &stock.id, "AAPL", "NASDAQ", "10", 150_00, 150_000).await;
+    seed_portfolio_stock_lot(
+        &repo_pool, &stock.id, "AAPL", "NASDAQ", "10", 150_00, 150_000,
+    )
+    .await;
     seed_price(&repo_pool, stock.id.clone(), 150_00, "USD").await;
 
     // --- CRYPTO BTC (USD) ---
@@ -553,7 +586,16 @@ async fn portfolio_multi_currency_lifecycle() {
     )
     .await;
     // Crypto lot: 1 BTC @ 60,000 USD → current_value = 1 * 6000000000 = 6_000_000_000
-    seed_portfolio_crypto_lot(&repo_pool, &btc.id, "BTC", "bitcoin", "1", 6_000_000_000, 6_000_000_000).await;
+    seed_portfolio_crypto_lot(
+        &repo_pool,
+        &btc.id,
+        "BTC",
+        "bitcoin",
+        "1",
+        6_000_000_000,
+        6_000_000_000,
+    )
+    .await;
     seed_price(&repo_pool, btc.id.clone(), 6_000_000_000, "USD").await;
 
     // Trigger price refresh: call get_portfolio_summary which recomputes valuations
@@ -586,7 +628,11 @@ async fn portfolio_multi_currency_lifecycle() {
         "total should be ~2.8125B VND (gold 2.8125B + AAPL raw 150,000; FX conversion not applied), got {}",
         total
     );
-    assert_eq!(summary.assets.len(), 3, "summary must contain exactly 3 assets");
+    assert_eq!(
+        summary.assets.len(),
+        3,
+        "summary must contain exactly 3 assets"
+    );
 
     // Per-asset assertions: each asset has non-negative current_value and correct currency.
     // BTC now has currency=USD with current_value from quantity_open * latest price observation.
@@ -594,8 +640,16 @@ async fn portfolio_multi_currency_lifecycle() {
     let mut found_aapl = false;
     let mut found_btc = false;
     for asset in &summary.assets {
-        let name = asset.asset.as_ref().map(|a| a.display_name.as_str()).unwrap_or("?");
-        let currency = asset.asset.as_ref().map(|a| a.currency.as_str()).unwrap_or("?");
+        let name = asset
+            .asset
+            .as_ref()
+            .map(|a| a.display_name.as_str())
+            .unwrap_or("?");
+        let currency = asset
+            .asset
+            .as_ref()
+            .map(|a| a.currency.as_str())
+            .unwrap_or("?");
         let current_value = asset.current_value;
         assert!(
             current_value >= 0,
@@ -611,12 +665,18 @@ async fn portfolio_multi_currency_lifecycle() {
             }
             "AAPL" => {
                 assert_eq!(currency, "USD", "AAPL currency must be USD");
-                assert_eq!(current_value, 150_000, "AAPL current_value mismatch (cents)");
+                assert_eq!(
+                    current_value, 150_000,
+                    "AAPL current_value mismatch (cents)"
+                );
                 found_aapl = true;
             }
             "BTC" => {
                 assert_eq!(currency, "USD", "BTC currency must be USD");
-                assert!(current_value > 0, "BTC current_value must be > 0 (crypto_lot priced by value_asset)");
+                assert!(
+                    current_value > 0,
+                    "BTC current_value must be > 0 (crypto_lot priced by value_asset)"
+                );
                 found_btc = true;
             }
             _ => {}
@@ -635,7 +695,14 @@ async fn portfolio_multi_currency_lifecycle() {
 /// wraps the existing 5-arg seed_portfolio_asset.
 async fn seed_portfolio_asset_simple(pool: &MySqlPool, currency: &str) -> DbPortfolioAsset {
     let budget_id = seed_budget(pool).await;
-    seed_portfolio_asset(pool, budget_id, AssetClassNew::GoldLot, "Test Gold", currency).await
+    seed_portfolio_asset(
+        pool,
+        budget_id,
+        AssetClassNew::GoldLot,
+        "Test Gold",
+        currency,
+    )
+    .await
 }
 
 /// Trigger one RefreshJob tick by constructing a RefreshJob from the pool and
@@ -652,10 +719,16 @@ async fn trigger_refresh(pool: &MySqlPool) {
 }
 
 /// Retrieve the latest price observation for an asset, if any.
-async fn get_latest_observation(pool: &MySqlPool, asset_id: &str) -> Option<budget::converters::portfolio::DbPriceObservation> {
+async fn get_latest_observation(
+    pool: &MySqlPool,
+    asset_id: &str,
+) -> Option<budget::converters::portfolio::DbPriceObservation> {
     let repo = PortfolioRepository::new(pool.clone());
     let mut tx = repo.begin().await.expect("begin tx");
-    let result = repo.latest_price_observation(&mut tx, asset_id).await.expect("latest_price_observation failed");
+    let result = repo
+        .latest_price_observation(&mut tx, asset_id)
+        .await
+        .expect("latest_price_observation failed");
     tx.commit().await.expect("commit failed");
     result
 }
@@ -699,7 +772,8 @@ async fn refresh_records_native_currency_not_vnd() {
         asset.id
     );
     assert_eq!(
-        obs.unwrap().currency, "USD",
+        obs.unwrap().currency,
+        "USD",
         "price observation currency must match asset native currency (USD), not hardcoded VND"
     );
 }

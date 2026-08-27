@@ -114,8 +114,10 @@ impl RefreshJob {
         }
         // Build asset_id → currency lookup so price observations record
         // the asset's native currency instead of hardcoding "VND".
-        let asset_currency: std::collections::HashMap<&str, &str> =
-            assets.iter().map(|a| (a.id.as_str(), a.currency.as_str())).collect();
+        let asset_currency: std::collections::HashMap<&str, &str> = assets
+            .iter()
+            .map(|a| (a.id.as_str(), a.currency.as_str()))
+            .collect();
 
         let mut tx = self.repo.begin().await?;
         let mut inserted = 0_usize;

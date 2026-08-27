@@ -35,13 +35,15 @@ async fn run_migrations_idempotent(pool: &MySqlPool) {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL; run with `--ignored`"]
 async fn apply_pending_migrations_idempotently() {
-    let url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for `--ignored` runs");
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for `--ignored` runs");
     let pool = MySqlPool::connect(&url).await.expect("connect");
 
     // Print pre-state for visibility.
-    let rows = sqlx::query("SELECT version, description, success FROM _sqlx_migrations ORDER BY version")
-        .fetch_all(&pool).await.expect("query _sqlx_migrations");
+    let rows =
+        sqlx::query("SELECT version, description, success FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .expect("query _sqlx_migrations");
     eprintln!("_sqlx_migrations PRE: {} rows", rows.len());
     for r in &rows {
         let v: i64 = r.get("version");
@@ -78,7 +80,9 @@ async fn apply_pending_migrations_idempotently() {
     run_migrations_idempotent(&pool).await;
 
     let post = sqlx::query("SELECT COUNT(*) as c FROM _sqlx_migrations")
-        .fetch_one(&pool).await.expect("post-count");
+        .fetch_one(&pool)
+        .await
+        .expect("post-count");
     let c: i64 = post.get("c");
     eprintln!("_sqlx_migrations POST: {} rows", c);
 

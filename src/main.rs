@@ -77,7 +77,9 @@ async fn main() -> anyhow::Result<()> {
         IdentityClient::from_channel(
             philand_application::connect::connect_default(&identity_url)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}"))?
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
+                })?,
         ),
         biz.clone(),
         fx_svc.clone(),
@@ -97,9 +99,10 @@ async fn main() -> anyhow::Result<()> {
 
     // HTTP server (health only — business routes served via gRPC through gateway)
     let http_addr: SocketAddr = format!("{}:{}", config.http_host, config.http_port).parse()?;
-    let http_app = Router::new()
-        .route("/health", get(health_check))
-        .route("/metrics", get(move || async move { metrics_handle.render() }));
+    let http_app = Router::new().route("/health", get(health_check)).route(
+        "/metrics",
+        get(move || async move { metrics_handle.render() }),
+    );
     let http_listener = tokio::net::TcpListener::bind(http_addr).await?;
     tracing::info!("HTTP server listening on {}", http_addr);
 

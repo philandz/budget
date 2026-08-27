@@ -1080,10 +1080,7 @@ impl PortfolioBiz {
         let today = today_business_date();
         let mut out = Vec::with_capacity(assets.len());
         for asset in &assets {
-            let v = self
-                .valuation()
-                .value_asset(&mut tx, asset, today)
-                .await?;
+            let v = self.valuation().value_asset(&mut tx, asset, today).await?;
             out.push(pb::ValuatedAsset {
                 asset: Some(pconv::map_portfolio_asset(asset.clone())),
                 current_value: v.current_value,
@@ -1115,14 +1112,13 @@ impl PortfolioBiz {
 
         // Fetch budget base currency for FX conversion.
         let mut tx = self.repo.begin().await.map_err(internal)?;
-        let base_currency: String = sqlx::query_scalar(
-            "SELECT currency FROM budgets WHERE id = ? AND deleted_at IS NULL",
-        )
-        .bind(budget_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(internal)?
-        .unwrap_or_else(|| "VND".to_string());
+        let base_currency: String =
+            sqlx::query_scalar("SELECT currency FROM budgets WHERE id = ? AND deleted_at IS NULL")
+                .bind(budget_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(internal)?
+                .unwrap_or_else(|| "VND".to_string());
         tx.commit().await.map_err(internal)?;
 
         let mut total_value: i64 = 0;
@@ -1136,7 +1132,9 @@ impl PortfolioBiz {
                 .as_ref()
                 .map(|a| a.currency.as_str())
                 .unwrap_or("VND");
-            let converted_value = self.fx_svc.convert(v.current_value, asset_currency, &base_currency);
+            let converted_value =
+                self.fx_svc
+                    .convert(v.current_value, asset_currency, &base_currency);
             total_value += converted_value;
             total_cost += v.open_cost_basis;
             total_realized += v.realized_pnl;

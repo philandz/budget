@@ -117,7 +117,9 @@ impl FxRateService {
         }
 
         tracing::info!("FX rate cache warmed with {} entries", cache.len());
-        Ok(Self { cache: Arc::new(cache) })
+        Ok(Self {
+            cache: Arc::new(cache),
+        })
     }
 
     /// Convert `amount` (in minor units) from `from` currency to `to` currency.

@@ -8,8 +8,11 @@ async fn inspect_lock() {
     // query who holds GET_LOCK
     let rows = sqlx::query(
         "SELECT IS_USED_LOCK('sqlx::connect') AS lock_holder,
-         IS_FREE_LOCK('sqlx::connect') AS is_free"
-    ).fetch_one(&pool).await.expect("query");
+         IS_FREE_LOCK('sqlx::connect') AS is_free",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query");
     let holder: Option<i64> = rows.try_get("lock_holder").ok();
     let is_free: i64 = rows.try_get("is_free").ok().unwrap_or(0);
     eprintln!("is_free_lock={} lock_holder_thread={:?}", is_free, holder);
@@ -22,6 +25,9 @@ async fn inspect_lock() {
         let user: String = p.get("user");
         let state: Option<String> = p.try_get("state").ok();
         let info: Option<String> = p.try_get("info").ok();
-        eprintln!("  id={} user={} state={:?} info={:?}", id, user, state, info);
+        eprintln!(
+            "  id={} user={} state={:?} info={:?}",
+            id, user, state, info
+        );
     }
 }

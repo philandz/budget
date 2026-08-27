@@ -23,11 +23,15 @@ async fn synthesize_history() {
         if path.extension().and_then(|s| s.to_str()) != Some("sql") {
             continue;
         }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         // Files look like <version>_<description>.sql — version is the
         // leading numeric segment up to the first underscore.
         let version_str: String = stem.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let Ok(version) = version_str.parse::<i64>() else { continue };
+        let Ok(version) = version_str.parse::<i64>() else {
+            continue;
+        };
         let description = stem[version_str.len() + 1..].replace('_', " ");
         let body = std::fs::read(&path).expect("read sql");
         let mut hasher = <sha2::Sha384 as sha2::Digest>::new();
@@ -45,13 +49,12 @@ async fn synthesize_history() {
     let mut inserted = 0usize;
     let mut skipped = 0usize;
     for (version, description, checksum) in entries {
-        let row_exists: bool = sqlx::query_scalar(
-            "SELECT COUNT(*) > 0 FROM _sqlx_migrations WHERE version = ?",
-        )
-        .bind(version)
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
+        let row_exists: bool =
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM _sqlx_migrations WHERE version = ?")
+                .bind(version)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(false);
 
         if row_exists {
             skipped += 1;
@@ -80,5 +83,8 @@ async fn synthesize_history() {
             Err(e) => eprintln!("failed version={}: {}", version, e),
         }
     }
-    eprintln!("synthesize_history done: inserted={}, skipped={}", inserted, skipped);
+    eprintln!(
+        "synthesize_history done: inserted={}, skipped={}",
+        inserted, skipped
+    );
 }
