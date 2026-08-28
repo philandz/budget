@@ -1,3 +1,6 @@
+// tonic::Status is large; allow result_large_err across the crate
+#![allow(clippy::result_large_err)]
+
 pub mod pb {
     pub mod service {
         pub mod budget {
