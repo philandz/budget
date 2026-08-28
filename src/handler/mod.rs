@@ -487,3 +487,5 @@ impl BudgetService for BudgetHandler {
         Ok(Response::new(ListPriceSnapshotsResponse { snapshots }))
     }
 }
+
+pub mod portfolio;

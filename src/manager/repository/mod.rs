@@ -9,6 +9,9 @@ use crate::converters::{
 };
 use crate::pb::service::budget::{BudgetRole, BudgetType, RolloverPolicy};
 
+pub mod fx_rates;
+pub mod portfolio;
+
 pub struct BudgetRepository {
     pool: MySqlPool,
 }
@@ -696,19 +699,17 @@ impl BudgetRepository {
     }
 
     pub async fn get_envelope_limit(&self, budget_id: &str) -> Result<Option<i64>> {
+        // monthly_limit is BIGINT; decode straight to i64 (the previous
+        // CAST(CASR(AS UNSIGNED)) path emitted a mismatched SQL type for
+        // sqlx's Row decoder and panicked the worker thread).
         let row = sqlx::query(
-            "SELECT CAST(CAST(monthly_limit AS CHAR) AS UNSIGNED) FROM budget_envelope_limits WHERE BINARY budget_id = BINARY ?"
+            "SELECT monthly_limit FROM budget_envelope_limits WHERE BINARY budget_id = BINARY ?",
         )
         .bind(budget_id)
         .fetch_optional(&self.pool)
         .await?;
-        match row {
-            Some(r) => {
-                let val: String = sqlx::Row::get(&r, 0);
-                Ok(Some(val.parse::<i64>().unwrap_or(0)))
-            }
-            None => Ok(None),
-        }
+        let val: Option<i64> = row.map(|r| sqlx::Row::get(&r, 0));
+        Ok(val)
     }
 
     /// Sum of expense entries in the current calendar month (shared DB with Entry service).
