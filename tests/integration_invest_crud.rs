@@ -571,10 +571,10 @@ async fn portfolio_multi_currency_lifecycle() {
     .await;
     // Stock lot: 10 shares @ 150 USD/share → current_value = 10 * 150_00 = 150_000 (stored as cents)
     seed_portfolio_stock_lot(
-        &repo_pool, &stock.id, "AAPL", "NASDAQ", "10", 150_00, 150_000,
+        &repo_pool, &stock.id, "AAPL", "NASDAQ", "10", 15_000, 150_000,
     )
     .await;
-    seed_price(&repo_pool, stock.id.clone(), 150_00, "USD").await;
+    seed_price(&repo_pool, stock.id.clone(), 15_000, "USD").await;
 
     // --- CRYPTO BTC (USD) ---
     let btc = seed_portfolio_asset(
