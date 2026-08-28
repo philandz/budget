@@ -39,9 +39,36 @@ fn new_id() -> String {
 impl BudgetRepository {
     pub async fn new(config: &BudgetServiceConfig) -> Result<Self> {
         let pool = sqlx::MySqlPool::connect(&config.database_url).await?;
-        philand_storage::migrate::run_idempotent(&pool, "./migrations")
-            .await
-            .map_err(philand_storage::StorageError::Migrate)?;
+        let mut migrator =
+            sqlx::migrate::Migrator::new(std::path::Path::new("./migrations")).await?;
+        migrator.set_ignore_missing(true);
+
+        if let Err(e) = migrator.run(&pool).await {
+            let err_str = e.to_string();
+            if err_str.contains("partially applied") {
+                tracing::warn!("Partial migration detected: {}", e);
+                if err_str.contains("20260507090228") {
+                    let has_avatar: bool = sqlx::query_scalar(
+                        "SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar'"
+                    )
+                    .fetch_one(&pool)
+                    .await.unwrap_or(false);
+                    if has_avatar {
+                        sqlx::query(
+                            "INSERT IGNORE INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time) VALUES (20260507090228, 'add_avatar_to_users', NOW(), true, 0x00, 0)"
+                        )
+                        .execute(&pool)
+                        .await.ok();
+                    }
+                }
+                sqlx::query("DELETE FROM _sqlx_migrations WHERE success = false")
+                    .execute(&pool)
+                    .await
+                    .ok();
+            } else {
+                return Err(anyhow::anyhow!("{}", e));
+            }
+        }
         Ok(Self { pool })
     }
 

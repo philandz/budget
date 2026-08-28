@@ -124,7 +124,7 @@ message PageMeta {
   int64 total_rows = 4;
 }
 
-message ListBudgetsRequest  {
+message ListBudgetsRequest {
   string org_id = 1;
   ListBudgetParams params = 2;
 }
