@@ -1,0 +1,684 @@
+syntax = "proto3";
+
+package service.portfolio;
+
+option go_package = "github.com/philandz/philand/protobuf/portfolio";
+
+import "libs/protobuf/common/base.proto";
+import "libs/protobuf/google/api/annotations.proto";
+
+// ---------------------------------------------------------------------------
+// Asset class and status enums
+// ---------------------------------------------------------------------------
+
+enum PortfolioAssetClass {
+  PORTFOLIO_ASSET_CLASS_UNSPECIFIED = 0;
+  PORTFOLIO_ASSET_CLASS_SAVINGS_ACCOUNT = 1;
+  PORTFOLIO_ASSET_CLASS_FIXED_DEPOSIT = 2;
+  PORTFOLIO_ASSET_CLASS_GOLD_LOT = 3;
+  PORTFOLIO_ASSET_CLASS_STOCK_LOT = 4;
+  PORTFOLIO_ASSET_CLASS_ETF_LOT = 5;
+  PORTFOLIO_ASSET_CLASS_CRYPTO_LOT = 6;
+}
+
+enum EtfUnderlyingIndex {
+  ETF_UNDERLYING_INDEX_UNSPECIFIED = 0;
+  ETF_UNDERLYING_INDEX_VN30 = 1;
+  ETF_UNDERLYING_INDEX_VN100 = 2;
+  ETF_UNDERLYING_INDEX_HNX30 = 3;
+  ETF_UNDERLYING_INDEX_OTHER = 4;
+}
+
+enum CryptoNetwork {
+  CRYPTO_NETWORK_UNSPECIFIED = 0;
+  CRYPTO_NETWORK_BITCOIN = 1;
+  CRYPTO_NETWORK_ETHEREUM = 2;
+  CRYPTO_NETWORK_SOLANA = 3;
+  CRYPTO_NETWORK_BNB_CHAIN = 4;
+  CRYPTO_NETWORK_POLKADOT = 5;
+  CRYPTO_NETWORK_OTHER = 6;
+}
+
+enum PortfolioAssetStatus {
+  PORTFOLIO_ASSET_STATUS_UNSPECIFIED = 0;
+  PORTFOLIO_ASSET_STATUS_ACTIVE = 1;
+  PORTFOLIO_ASSET_STATUS_CLOSED = 2;
+  PORTFOLIO_ASSET_STATUS_MATURED = 3;
+  PORTFOLIO_ASSET_STATUS_SOLD = 4;
+  PORTFOLIO_ASSET_STATUS_ARCHIVED = 5;
+  PORTFOLIO_ASSET_STATUS_ROLLED_OVER = 6;
+  PORTFOLIO_ASSET_STATUS_WITHDRAWN = 7;
+  PORTFOLIO_ASSET_STATUS_EARLY_CLOSED = 8;
+}
+
+enum InterestMethod {
+  INTEREST_METHOD_UNSPECIFIED = 0;
+  INTEREST_METHOD_SIMPLE = 1;
+  INTEREST_METHOD_COMPOUND = 2;
+}
+
+enum PayoutType {
+  PAYOUT_TYPE_UNSPECIFIED = 0;
+  PAYOUT_TYPE_AT_MATURITY = 1;
+  PAYOUT_TYPE_MONTHLY = 2;
+  PAYOUT_TYPE_QUARTERLY = 3;
+  PAYOUT_TYPE_ON_DEMAND = 4;
+}
+
+enum AutoRenewalPolicy {
+  AUTO_RENEWAL_POLICY_UNSPECIFIED = 0;
+  AUTO_RENEWAL_POLICY_NONE = 1;
+  AUTO_RENEWAL_POLICY_PRINCIPAL_ONLY = 2;
+  AUTO_RENEWAL_POLICY_PRINCIPAL_AND_INTEREST = 3;
+}
+
+enum GoldPurity {
+  GOLD_PURITY_UNSPECIFIED = 0;
+  GOLD_PURITY_SJC_9999 = 1;
+  GOLD_PURITY_PNJ_999 = 2;
+  GOLD_PURITY_PNJ_995 = 3;
+  GOLD_PURITY_DOJI_9999 = 4;
+  GOLD_PURITY_OTHER = 5;
+}
+
+enum GoldForm {
+  GOLD_FORM_UNSPECIFIED = 0;
+  GOLD_FORM_BAR = 1;
+  GOLD_FORM_RING = 2;
+  GOLD_FORM_COIN = 3;
+  GOLD_FORM_JEWELRY = 4;
+  GOLD_FORM_OTHER = 5;
+}
+
+enum GoldUnit {
+  GOLD_UNIT_UNSPECIFIED = 0;
+  GOLD_UNIT_CHI = 1;
+  GOLD_UNIT_LUONG = 2;
+  GOLD_UNIT_GRAM = 3;
+}
+
+enum StockExchange {
+  STOCK_EXCHANGE_UNSPECIFIED = 0;
+  STOCK_EXCHANGE_HOSE = 1;
+  STOCK_EXCHANGE_HNX = 2;
+  STOCK_EXCHANGE_UPCOM = 3;
+}
+
+enum PriceSide {
+  PRICE_SIDE_UNSPECIFIED = 0;
+  PRICE_SIDE_BID = 1;
+  PRICE_SIDE_ASK = 2;
+  PRICE_SIDE_MID = 3;
+}
+
+enum PriceFreshness {
+  PRICE_FRESHNESS_UNSPECIFIED = 0;
+  PRICE_FRESHNESS_FRESH = 1;
+  PRICE_FRESHNESS_STALE = 2;
+  PRICE_FRESHNESS_UNPRICED = 3;
+}
+
+enum ActivityType {
+  ACTIVITY_TYPE_UNSPECIFIED = 0;
+  ACTIVITY_TYPE_CREATED = 1;
+  ACTIVITY_TYPE_UPDATED_METADATA = 2;
+  ACTIVITY_TYPE_BALANCE_ADJUSTED = 3;
+  ACTIVITY_TYPE_RATE_RECORDED = 4;
+  ACTIVITY_TYPE_PRICE_OBSERVED = 5;
+  ACTIVITY_TYPE_DISPOSAL_RECORDED = 6;
+  ACTIVITY_TYPE_STATUS_CHANGED = 7;
+  ACTIVITY_TYPE_MATURITY_REACHED = 8;
+  ACTIVITY_TYPE_ROLLED_OVER = 9;
+  ACTIVITY_TYPE_TRANSFER_INITIATED = 10;
+  ACTIVITY_TYPE_TRANSFER_COMPLETED = 11;
+  ACTIVITY_TYPE_ARCHIVED = 12;
+  ACTIVITY_TYPE_DELETED = 13;
+}
+
+// ---------------------------------------------------------------------------
+// Core asset messages
+// ---------------------------------------------------------------------------
+
+message PortfolioAsset {
+  common.base.Base base = 1;
+  string budget_id = 2;
+  PortfolioAssetClass asset_class = 3;
+  string display_name = 4;
+  string currency = 5;
+  PortfolioAssetStatus status = 6;
+  int64 opened_on = 7;
+  int64 closed_on = 8;
+  string legacy_asset_id = 9;
+  string notes = 10;
+
+  oneof details {
+    PortfolioSavingsAccount savings_account = 20;
+    PortfolioFixedDeposit fixed_deposit = 21;
+    PortfolioGoldLot gold_lot = 22;
+    PortfolioStockLot stock_lot = 23;
+    PortfolioEtfLot etf_lot = 24;
+    PortfolioCryptoLot crypto_lot = 25;
+  }
+}
+
+message PortfolioSavingsAccount {
+  string asset_id = 1;
+  string provider = 2;
+  string account_reference_masked = 3;
+  int64 current_balance = 4;
+  int64 balance_as_of = 5;
+  double annual_rate = 6;
+  InterestMethod interest_method = 7;
+  PayoutType payout_type = 8;
+  int64 opened_on = 9;
+  string notes = 10;
+}
+
+message PortfolioFixedDeposit {
+  string asset_id = 1;
+  string provider = 2;
+  string product_name = 3;
+  int64 principal = 4;
+  double annual_rate = 5;
+  InterestMethod interest_method = 6;
+  PayoutType payout_type = 7;
+  int64 deposit_date = 8;
+  int64 maturity_date = 9;
+  AutoRenewalPolicy auto_renewal_policy = 10;
+  string rollover_from_asset_id = 11;
+  string certificate_reference_masked = 12;
+  string notes = 13;
+}
+
+message PortfolioGoldLot {
+  string asset_id = 1;
+  string provider = 2;
+  string gold_type = 3;
+  GoldPurity purity = 4;
+  GoldForm form = 5;
+  string quantity_original = 6;
+  GoldUnit unit_original = 7;
+  string quantity_grams = 8;
+  int64 purchase_price_per_unit_original = 9;
+  int64 purchase_cost = 10;
+  int64 fees = 11;
+  int64 purchase_date = 12;
+  string notes = 13;
+}
+
+message PortfolioStockLot {
+  string asset_id = 1;
+  string ticker = 2;
+  StockExchange exchange = 3;
+  string quantity_bought = 4;
+  string quantity_open = 5;
+  int64 buy_price_per_share = 6;
+  int64 purchase_cost = 7;
+  int64 fees = 8;
+  int64 purchase_date = 9;
+  int64 settlement_date = 10;
+  string notes = 11;
+}
+
+message PortfolioEtfLot {
+  string asset_id = 1;
+  string ticker = 2;
+  StockExchange exchange = 3;
+  EtfUnderlyingIndex underlying_index = 4;
+  string fund_provider = 5;
+  string quantity_bought = 6;
+  string quantity_open = 7;
+  int64 buy_price_per_unit = 8;
+  int64 purchase_cost = 9;
+  int64 fees = 10;
+  int64 purchase_date = 11;
+  int64 settlement_date = 12;
+  string notes = 13;
+}
+
+message PortfolioCryptoLot {
+  string asset_id = 1;
+  string symbol = 2;
+  CryptoNetwork network = 3;
+  string custody_wallet = 4;
+  string quantity_bought = 5;
+  string quantity_open = 6;
+  int64 buy_price_per_unit = 7;
+  int64 purchase_cost = 8;
+  int64 fees = 9;
+  int64 purchase_date = 10;
+  string notes = 11;
+}
+
+message PortfolioStockDisposal {
+  string id = 1;
+  string asset_id = 2;
+  int64 disposal_date = 3;
+  string quantity_sold = 4;
+  int64 sale_proceeds = 5;
+  int64 sale_fees = 6;
+  int64 realized_pnl = 7;
+  int64 cost_basis_allocated = 8;
+}
+
+message PortfolioGoldDisposal {
+  string id = 1;
+  string asset_id = 2;
+  int64 disposal_date = 3;
+  string quantity_grams_sold = 4;
+  int64 sale_proceeds = 5;
+  int64 sale_fees = 6;
+  int64 realized_pnl = 7;
+  int64 cost_basis_allocated = 8;
+}
+
+message PriceObservation {
+  string id = 1;
+  string asset_id = 2;
+  string provider = 3;
+  PriceSide price_side = 4;
+  int64 unit_price = 5;
+  string currency = 6;
+  int64 observed_at = 7;
+  string source_reference = 8;
+  string notes = 9;
+}
+
+message PortfolioActivity {
+  string id = 1;
+  string asset_id = 2;
+  string budget_id = 3;
+  ActivityType activity_type = 4;
+  string actor_user_id = 5;
+  string correlation_id = 6;
+  string idempotency_key = 7;
+  int64 occurred_at = 8;
+  string payload_json = 9;
+}
+
+// ---------------------------------------------------------------------------
+// Valuation and summary
+// ---------------------------------------------------------------------------
+
+message ValuatedAsset {
+  PortfolioAsset asset = 1;
+  int64 current_value = 2;
+  int64 open_cost_basis = 3;
+  int64 realized_pnl = 4;
+  int64 unrealized_pnl = 5;
+  int64 accrued_interest = 6;
+  double return_pct = 7;
+  PriceFreshness freshness = 8;
+  int64 quote_observed_at = 9;
+  string formula_version = 10;
+}
+
+message PortfolioSummary {
+  string budget_id = 1;
+  int64 total_current_value = 2;
+  int64 total_open_cost_basis = 3;
+  int64 total_realized_pnl = 4;
+  int64 total_unrealized_pnl = 5;
+  double total_return_pct = 6;
+  string currency = 7;
+  repeated ValuatedAsset assets = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Request/response messages
+// ---------------------------------------------------------------------------
+
+message CreateSavingsAccountRequest {
+  string budget_id = 1;
+  string display_name = 2;
+  string currency = 3;
+  string provider = 4;
+  string account_reference_masked = 5;
+  int64 current_balance = 6;
+  int64 balance_as_of = 7;
+  double annual_rate = 8;
+  InterestMethod interest_method = 9;
+  PayoutType payout_type = 10;
+  int64 opened_on = 11;
+  string notes = 12;
+  string idempotency_key = 13;
+}
+
+message CreateFixedDepositRequest {
+  string budget_id = 1;
+  string display_name = 2;
+  string currency = 3;
+  string provider = 4;
+  string product_name = 5;
+  int64 principal = 6;
+  double annual_rate = 7;
+  InterestMethod interest_method = 8;
+  PayoutType payout_type = 9;
+  int64 deposit_date = 10;
+  int64 maturity_date = 11;
+  AutoRenewalPolicy auto_renewal_policy = 12;
+  string certificate_reference_masked = 13;
+  string notes = 14;
+  string idempotency_key = 15;
+}
+
+message CreateGoldLotRequest {
+  string budget_id = 1;
+  string display_name = 2;
+  string currency = 3;
+  string provider = 4;
+  string gold_type = 5;
+  GoldPurity purity = 6;
+  GoldForm form = 7;
+  string quantity_original = 8;
+  GoldUnit unit_original = 9;
+  int64 purchase_price_per_unit_original = 10;
+  int64 fees = 11;
+  int64 purchase_date = 12;
+  string notes = 13;
+  string idempotency_key = 14;
+}
+
+message CreateStockLotRequest {
+  string budget_id = 1;
+  string display_name = 2;
+  string currency = 3;
+  string ticker = 4;
+  StockExchange exchange = 5;
+  string quantity_bought = 6;
+  int64 buy_price_per_share = 7;
+  int64 fees = 8;
+  int64 purchase_date = 9;
+  int64 settlement_date = 10;
+  string notes = 11;
+  string idempotency_key = 12;
+}
+
+message CreateEtfLotRequest {
+  string budget_id = 1;
+  string display_name = 2;
+  string currency = 3;
+  string ticker = 4;
+  StockExchange exchange = 5;
+  string underlying_index = 6;
+  string fund_provider = 7;
+  string quantity_bought = 8;
+  int64 buy_price_per_unit = 9;
+  int64 fees = 10;
+  int64 purchase_date = 11;
+  int64 settlement_date = 12;
+  string notes = 13;
+  string idempotency_key = 14;
+}
+
+message CreateCryptoLotRequest {
+  string budget_id = 1;
+  string display_name = 2;
+  string currency = 3;
+  string symbol = 4;
+  string network = 5;
+  string custody_wallet = 6;
+  string quantity_bought = 7;
+  int64 buy_price_per_unit = 8;
+  int64 fees = 9;
+  int64 purchase_date = 10;
+  string notes = 11;
+  string idempotency_key = 12;
+}
+
+message UpdateAssetMetadataRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  string display_name = 3;
+  string notes = 4;
+}
+
+message ArchiveAssetRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+}
+
+message GetAssetRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+}
+
+message GetAssetResponse {
+  ValuatedAsset asset = 1;
+}
+
+message ListAssetsRequest {
+  string budget_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListAssetsResponse {
+  repeated ValuatedAsset assets = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  int64 total_rows = 4;
+}
+
+message GetPortfolioSummaryRequest {
+  string budget_id = 1;
+}
+
+message GetPortfolioSummaryResponse {
+  PortfolioSummary summary = 1;
+}
+
+message RecordFixedDepositMaturityRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  int64 actual_settlement_value = 3;
+  int64 settlement_date = 4;
+  string notes = 5;
+  string idempotency_key = 6;
+}
+
+message RecordFixedDepositRolloverRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  int64 new_principal = 3;
+  double new_annual_rate = 4;
+  int64 new_maturity_date = 5;
+  string new_display_name = 6;
+  string idempotency_key = 7;
+}
+
+message RecordGoldDisposalRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  string quantity_grams_sold = 3;
+  int64 sale_proceeds = 4;
+  int64 sale_fees = 5;
+  int64 disposal_date = 6;
+  string notes = 7;
+  string idempotency_key = 8;
+}
+
+message RecordStockDisposalRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  string quantity_sold = 3;
+  int64 sale_proceeds = 4;
+  int64 sale_fees = 5;
+  int64 disposal_date = 6;
+  string notes = 7;
+  string idempotency_key = 8;
+}
+
+message RecordPriceObservationRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  PriceSide price_side = 3;
+  int64 unit_price = 4;
+  string currency = 5;
+  int64 observed_at = 6;
+  string source_reference = 7;
+  string notes = 8;
+  string idempotency_key = 9;
+}
+
+message ListPriceObservationsRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  int32 limit = 3;
+}
+
+message ListPriceObservationsResponse {
+  repeated PriceObservation observations = 1;
+}
+
+message ListAssetActivityRequest {
+  string budget_id = 1;
+  string asset_id = 2;
+  int32 limit = 3;
+}
+
+message ListAssetActivityResponse {
+  repeated PortfolioActivity activities = 1;
+}
+
+message RunBackfillRequest {
+  string budget_id = 1;
+}
+
+message RunBackfillResponse {
+  int32 migrated_count = 1;
+  int32 skipped_count = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Transfers (Phase 3.1)
+// ---------------------------------------------------------------------------
+
+enum TransferDirection {
+  TRANSFER_DIRECTION_UNSPECIFIED = 0;
+  TRANSFER_DIRECTION_STANDARD_TO_INVEST = 1;
+  TRANSFER_DIRECTION_INVEST_TO_STANDARD = 2;
+  TRANSFER_DIRECTION_INTERNAL_REBALANCE = 3;
+}
+
+enum TransferStatus {
+  TRANSFER_STATUS_UNSPECIFIED = 0;
+  TRANSFER_STATUS_REQUESTED = 1;
+  TRANSFER_STATUS_CASH_LEG_PENDING = 2;
+  TRANSFER_STATUS_ASSET_LEG_PENDING = 3;
+  TRANSFER_STATUS_COMPLETED = 4;
+  TRANSFER_STATUS_FAILED = 5;
+  TRANSFER_STATUS_COMPENSATION_PENDING = 6;
+  TRANSFER_STATUS_COMPENSATED = 7;
+}
+
+message CreatePortfolioTransferRequest {
+  string source_budget_id = 1;
+  string counterparty_budget_id = 2;
+  TransferDirection direction = 3;
+  int64 amount_minor = 4;
+  string currency = 5;
+  string asset_id = 6;  // optional; when set, append asset activity log
+  string idempotency_key = 7;
+  string notes = 8;
+}
+
+message CreatePortfolioTransferResponse {
+  PortfolioTransfer transfer = 1;
+}
+
+message PortfolioTransfer {
+  string id = 1;
+  string group_id = 2;
+  string source_budget_id = 3;
+  string counterparty_budget_id = 4;
+  TransferDirection direction = 5;
+  int64 amount_minor = 6;
+  string currency = 7;
+  TransferStatus status = 8;
+  string linked_entry_source_id = 9;
+  string linked_entry_counterparty_id = 10;
+  string idempotency_key = 11;
+  string actor_user_id = 12;
+  int64 created_at = 13;
+  int64 completed_at = 14;
+  string notes = 15;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+service PortfolioService {
+  // Asset root
+  rpc UpdateAssetMetadata(UpdateAssetMetadataRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { patch: "/budgets/{budget_id}/portfolio/assets/{asset_id}" body: "*" };
+  }
+  rpc ArchiveAsset(ArchiveAssetRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/{asset_id}/archive" body: "*" };
+  }
+  rpc GetAsset(GetAssetRequest) returns (GetAssetResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/portfolio/assets/{asset_id}" };
+  }
+  rpc ListAssets(ListAssetsRequest) returns (ListAssetsResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/portfolio/assets" };
+  }
+  rpc GetPortfolioSummary(GetPortfolioSummaryRequest) returns (GetPortfolioSummaryResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/portfolio/summary" };
+  }
+
+  // Class-specific creates
+  rpc CreateSavingsAccount(CreateSavingsAccountRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/savings-account" body: "*" };
+  }
+  rpc CreateFixedDeposit(CreateFixedDepositRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/fixed-deposit" body: "*" };
+  }
+  rpc CreateGoldLot(CreateGoldLotRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/gold-lot" body: "*" };
+  }
+  rpc CreateStockLot(CreateStockLotRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/stock-lot" body: "*" };
+  }
+  rpc CreateEtfLot(CreateEtfLotRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/etf-lot" body: "*" };
+  }
+  rpc CreateCryptoLot(CreateCryptoLotRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/crypto-lot" body: "*" };
+  }
+
+  // Class-specific actions
+  rpc RecordFixedDepositMaturity(RecordFixedDepositMaturityRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/fixed-deposit/{asset_id}/maturity" body: "*" };
+  }
+  rpc RecordFixedDepositRollover(RecordFixedDepositRolloverRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/fixed-deposit/{asset_id}/rollover" body: "*" };
+  }
+  rpc RecordGoldDisposal(RecordGoldDisposalRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/gold-lot/{asset_id}/disposal" body: "*" };
+  }
+  rpc RecordStockDisposal(RecordStockDisposalRequest) returns (PortfolioAsset) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/stock-lot/{asset_id}/disposal" body: "*" };
+  }
+
+  // Observations and activity
+  rpc RecordPriceObservation(RecordPriceObservationRequest) returns (PriceObservation) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/assets/{asset_id}/observations" body: "*" };
+  }
+  rpc ListPriceObservations(ListPriceObservationsRequest) returns (ListPriceObservationsResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/portfolio/assets/{asset_id}/observations" };
+  }
+  rpc ListAssetActivity(ListAssetActivityRequest) returns (ListAssetActivityResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/portfolio/assets/{asset_id}/activity" };
+  }
+
+  // Admin
+  rpc RunBackfill(RunBackfillRequest) returns (RunBackfillResponse) {
+    option (google.api.http) = { post: "/budgets/admin/portfolio/backfill" body: "*" };
+  }
+
+  // Transfers (Phase 3.1)
+  rpc CreateTransfer(CreatePortfolioTransferRequest) returns (CreatePortfolioTransferResponse) {
+    option (google.api.http) = { post: "/budgets/{source_budget_id}/portfolio/transfers" body: "*" };
+  }
+}

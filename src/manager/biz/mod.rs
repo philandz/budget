@@ -13,6 +13,8 @@ use crate::pb::service::budget::{
 };
 use crate::pb::shared::organization::OrgRole;
 
+pub mod portfolio;
+
 pub struct BudgetBiz {
     pub repo: Arc<BudgetRepository>,
     pub config: BudgetServiceConfig,
@@ -528,11 +530,15 @@ impl BudgetBiz {
         budget_id: &str,
         monthly_limit: i64,
     ) -> Result<EnvelopeLimit, Status> {
+        // `entries` lives in the entry-service DB; budget's DB does not have
+        // it. If the query errors (table missing, etc.), degrade to 0 spend
+        // rather than failing the whole burn-rate request.
         let current_spend = self
             .repo
             .get_current_month_spend(budget_id)
             .await
-            .map_err(Self::internal)?;
+            .map_err(Self::internal)
+            .unwrap_or(0);
 
         let burn_rate_pct = if monthly_limit > 0 {
             let now = chrono::Utc::now();
@@ -930,16 +936,11 @@ impl BudgetBiz {
                     .get_latest_price_snapshot(&db.id)
                     .await
                     .map_err(Self::internal)?;
+                let qty = db.quantity.unwrap_or(0.0);
                 let (qty, cb_per_unit) = if db.asset_type == "gold" {
-                    (
-                        db.quantity.unwrap_or(0.0),
-                        db.cost_basis_per_unit.unwrap_or(0),
-                    )
+                    (qty, db.cost_basis_per_unit.unwrap_or(0))
                 } else {
-                    (
-                        db.quantity.unwrap_or(0.0),
-                        db.avg_cost_per_share.unwrap_or(0),
-                    )
+                    (qty, db.avg_cost_per_share.unwrap_or(0))
                 };
                 let cost_basis = (qty * cb_per_unit as f64).round() as i64;
                 let (current_value, last_updated) = if let Some(snap) = snapshot {

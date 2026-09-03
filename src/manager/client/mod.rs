@@ -31,6 +31,15 @@ impl IdentityClient {
         })
     }
 
+    /// Construct from an already-connected channel. Use this with
+    /// `philand_application::connect::connect_default` so retries are
+    /// handled by the shared helper before this constructor wraps the channel.
+    pub fn from_channel(channel: Channel) -> Self {
+        Self {
+            inner: IdentityServiceClient::new(channel),
+        }
+    }
+
     pub async fn get_org_role(&mut self, user_id: &str, org_id: &str) -> Result<OrgRole, Status> {
         let resp = self
             .inner
