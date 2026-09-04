@@ -133,7 +133,10 @@ impl BudgetRepository {
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
                     COALESCE(cs.current_spend, 0) AS current_spend,
-                    b.is_private
+                    b.is_private,
+                    0 AS asset_count,
+                    0 AS total_current_value,
+                    0 AS total_cost_basis
                FROM budgets b
                LEFT JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -232,6 +235,106 @@ impl BudgetRepository {
         .bind(budget_id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Soft-delete all records related to a budget before deleting the budget itself.
+    /// Cascade order: invest_assets → budget_members → sharing cascade → budget.
+    pub async fn delete_budget_cascade(&self, budget_id: &str) -> Result<()> {
+        let now = now_unix();
+
+        // Soft-delete invest_assets
+        sqlx::query(
+            "UPDATE invest_assets SET deleted_at = ?, updated_at = ? WHERE budget_id = ? AND deleted_at IS NULL",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Soft-delete budget_members
+        sqlx::query(
+            "DELETE FROM budget_members WHERE budget_id = ?",
+        )
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // -----------------------------------------------------------------------
+        // Sharing cascade: soft-delete expenses, hard-delete orphaned legs, revoke participants, clean up
+        // -----------------------------------------------------------------------
+
+        // Hard-delete sharing_expense_legs for all expenses in this budget first
+        // (legs are orphaned when expenses are soft-deleted, so we hard-delete them)
+        sqlx::query(
+            "DELETE FROM sharing_expense_legs WHERE expense_id IN (SELECT id FROM sharing_expenses WHERE budget_id = ?)",
+        )
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Soft-delete sharing_expenses
+        sqlx::query(
+            "UPDATE sharing_expenses SET deleted_at = ?, updated_at = ? WHERE budget_id = ? AND deleted_at IS NULL",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Soft-delete sharing_participants (revoke)
+        sqlx::query(
+            "UPDATE sharing_participants SET revoked_at = ? WHERE budget_id = ? AND revoked_at IS NULL",
+        )
+        .bind(now)
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Hard-delete sharing_balances
+        sqlx::query(
+            "DELETE FROM sharing_balances WHERE budget_id = ?",
+        )
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Hard-delete sharing_join_links
+        sqlx::query(
+            "DELETE FROM sharing_join_links WHERE budget_id = ?",
+        )
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Hard-delete sharing_settlement_confirmations
+        sqlx::query(
+            "DELETE FROM sharing_settlement_confirmations WHERE budget_id = ?",
+        )
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Hard-delete sharing_activity_log
+        sqlx::query(
+            "DELETE FROM sharing_activity_log WHERE budget_id = ?",
+        )
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
+        // Finally, soft-delete the budget itself
+        sqlx::query(
+            "UPDATE budgets SET deleted_at = ?, status = 'deleted', updated_at = ? WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 

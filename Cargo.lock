@@ -347,6 +347,7 @@ dependencies = [
  "configs",
  "dotenvy",
  "env",
+ "futures",
  "hex",
  "logging",
  "metrics-exporter-prometheus",

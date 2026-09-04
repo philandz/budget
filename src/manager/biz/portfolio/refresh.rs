@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use tokio::time::{interval, MissedTickBehavior};
 
+use crate::converters::portfolio::{map_gold_lot, map_portfolio_asset, map_stock_lot};
 use crate::manager::biz::portfolio::providers::{
     DojiProvider, HnxProvider, HoseProvider, PnjProvider, SharedProviderRegistry, SjcProvider,
     UpcomProvider,
@@ -85,14 +86,6 @@ impl RefreshJob {
     }
 
     pub async fn tick(&self, http: &reqwest::Client) -> anyhow::Result<()> {
-        // Skip the round-trip if only the noop provider is registered.
-        // Each enabled provider would otherwise emit "no prices returned"
-        // every interval, drowning the log in noise.
-        if self.registry.is_noop_only() {
-            tracing::debug!("refresh: registry has no live providers; skipping tick");
-            return Ok(());
-        }
-
         let mut tx = self.repo.begin().await?;
         let assets = self.repo.list_active_for_refresh(&mut tx).await?;
         tx.commit().await?;
@@ -102,22 +95,19 @@ impl RefreshJob {
         }
         let count = assets.len();
         tracing::info!("refresh: fetching prices for {count} assets");
-        let proto_assets: Vec<pb::PortfolioAsset> = assets
+        // Build asset_id → currency lookup so price observations record
+        // the asset's native currency instead of hardcoding "VND".
+        // Must be built before assets is moved into build_proto_assets.
+        let asset_currency: std::collections::HashMap<String, String> = assets
             .iter()
-            .cloned()
-            .map(crate::converters::portfolio::map_portfolio_asset)
+            .map(|a| (a.id.clone(), a.currency.clone()))
             .collect();
+        let proto_assets = self.build_proto_assets(assets).await?;
         let prices = self.registry.fetch_all(http, &proto_assets).await;
         if prices.is_empty() {
             tracing::debug!("refresh: no prices returned (no providers match)");
             return Ok(());
         }
-        // Build asset_id → currency lookup so price observations record
-        // the asset's native currency instead of hardcoding "VND".
-        let asset_currency: std::collections::HashMap<&str, &str> = assets
-            .iter()
-            .map(|a| (a.id.as_str(), a.currency.as_str()))
-            .collect();
 
         let mut tx = self.repo.begin().await?;
         let mut inserted = 0_usize;
@@ -131,9 +121,8 @@ impl RefreshJob {
                 unit_price: price.unit_price,
                 currency: asset_currency
                     .get(price.asset_id.as_str())
-                    .copied()
-                    .unwrap_or("VND")
-                    .into(),
+                    .cloned()
+                    .unwrap_or_else(|| "VND".to_string()),
                 observed_at: now,
                 source_reference: price.source_reference.clone(),
                 idempotency_key: Some(format!(
@@ -162,6 +151,37 @@ impl RefreshJob {
         tx.commit().await?;
         tracing::info!("refresh: inserted {inserted}/{count} price observations");
         Ok(())
+    }
+
+    /// Convert database assets to proto, enriching gold and stock assets
+    /// with their lot details so providers can evaluate `supports()` correctly.
+    async fn build_proto_assets(
+        &self,
+        assets: Vec<crate::converters::portfolio::DbPortfolioAsset>,
+    ) -> anyhow::Result<Vec<pb::PortfolioAsset>> {
+        let mut tx = self.repo.begin().await?;
+        let mut proto_assets = Vec::with_capacity(assets.len());
+        for asset in &assets {
+            let mut proto = map_portfolio_asset(asset.clone());
+            match asset.asset_class.as_str() {
+                "gold_lot" => {
+                    if let Ok(Some(lot)) = self.repo.get_gold_lot(&mut tx, &asset.id).await {
+                        proto.details =
+                            Some(pb::portfolio_asset::Details::GoldLot(map_gold_lot(lot)));
+                    }
+                }
+                "stock_lot" => {
+                    if let Ok(Some(lot)) = self.repo.get_stock_lot(&mut tx, &asset.id).await {
+                        proto.details =
+                            Some(pb::portfolio_asset::Details::StockLot(map_stock_lot(lot)));
+                    }
+                }
+                _ => {}
+            }
+            proto_assets.push(proto);
+        }
+        tx.commit().await?;
+        Ok(proto_assets)
     }
 }
 

@@ -191,7 +191,7 @@ impl BudgetBiz {
         self.assert_min_role(budget_id, user_id, BudgetRole::Owner, user_type)
             .await?;
         self.repo
-            .delete_budget(budget_id)
+            .delete_budget_cascade(budget_id)
             .await
             .map_err(Self::internal)
     }
