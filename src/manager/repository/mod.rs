@@ -132,7 +132,8 @@ impl BudgetRepository {
                     CASE WHEN bm.role IS NOT NULL THEN bm.role ELSE ? END AS my_role,
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
-                    COALESCE(cs.current_spend, 0) AS current_spend
+                    COALESCE(cs.current_spend, 0) AS current_spend,
+                    b.is_private
                FROM budgets b
                LEFT JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -174,7 +175,8 @@ impl BudgetRepository {
                     '' AS my_role,
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
-                    COALESCE(cs.current_spend, 0) AS current_spend
+                    COALESCE(cs.current_spend, 0) AS current_spend,
+                    b.is_private
                FROM budgets b
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
@@ -206,14 +208,15 @@ impl BudgetRepository {
         budget_id: &str,
         name: &str,
         budget_type: BudgetType,
+        is_private: bool,
         updated_by: &str,
     ) -> Result<DbBudget> {
         let now = now_unix();
         let type_str = budget_type_to_db(budget_type);
         sqlx::query(
-            "UPDATE budgets SET name = ?, budget_type = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+            "UPDATE budgets SET name = ?, budget_type = ?, is_private = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
         )
-        .bind(name).bind(type_str).bind(now).bind(budget_id)
+        .bind(name).bind(type_str).bind(is_private).bind(now).bind(budget_id)
         .execute(&self.pool)
         .await?;
         self.get_budget_for_user(budget_id, updated_by, None).await
@@ -249,7 +252,8 @@ impl BudgetRepository {
                   bm.role AS my_role,
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
-                  COALESCE(cs.current_spend, 0) AS current_spend
+                  COALESCE(cs.current_spend, 0) AS current_spend,
+                  b.is_private
                FROM budgets b
                INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -374,7 +378,8 @@ impl BudgetRepository {
                       bm.role AS my_role,
                       el.monthly_limit AS envelope_limit,
                       COALESCE(mc.member_count, 0) AS member_count,
-                      COALESCE(cs.current_spend, 0) AS current_spend
+                      COALESCE(cs.current_spend, 0) AS current_spend,
+                      b.is_private
                    FROM budgets b
                    INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ? AND bm.role = ?
                    LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -411,7 +416,8 @@ impl BudgetRepository {
                       bm.role AS my_role,
                       el.monthly_limit AS envelope_limit,
                       COALESCE(mc.member_count, 0) AS member_count,
-                      COALESCE(cs.current_spend, 0) AS current_spend
+                      COALESCE(cs.current_spend, 0) AS current_spend,
+                      b.is_private
                    FROM budgets b
                    INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                    LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -515,7 +521,8 @@ impl BudgetRepository {
                   bm.role AS my_role,
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
-                  COALESCE(cs.current_spend, 0) AS current_spend
+                  COALESCE(cs.current_spend, 0) AS current_spend,
+                  b.is_private
                FROM budgets b
                LEFT JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = ''
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id

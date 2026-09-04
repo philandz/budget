@@ -27,6 +27,8 @@ pub struct DbBudget {
     pub member_count: Option<i32>,
     // current month spend for this budget
     pub current_spend: Option<i64>,
+    // sharing budget visibility
+    pub is_private: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -135,6 +137,7 @@ pub fn map_budget(db: DbBudget) -> Budget {
             0.0
         },
         member_count: db.member_count.unwrap_or(0),
+        is_private: db.is_private,
     }
 }
 

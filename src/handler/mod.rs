@@ -119,6 +119,7 @@ impl BudgetService for BudgetHandler {
                 &req.budget_id,
                 &req.name,
                 budget_type,
+                req.is_private,
                 user_type.as_deref(),
             )
             .await?;

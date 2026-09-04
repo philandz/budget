@@ -51,6 +51,7 @@ message Budget {
   int64  current_spend  = 8;   // spend so far this month
   double burn_rate_pct   = 9;   // projected % of limit consumed (0-100+)
   int32  member_count    = 10;  // number of members in this budget
+  bool   is_private       = 11; // sharing budget visibility flag
 }
 
 message BudgetMember {
@@ -101,6 +102,7 @@ message UpdateBudgetRequest {
   string budget_id   = 1;
   string name        = 2;
   BudgetType budget_type = 3;
+  bool is_private    = 4;
 }
 message UpdateBudgetResponse { Budget budget = 1; }
 

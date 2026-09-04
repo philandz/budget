@@ -169,13 +169,14 @@ impl BudgetBiz {
         budget_id: &str,
         name: &str,
         budget_type: BudgetType,
+        is_private: bool,
         user_type: Option<&str>,
     ) -> Result<Budget, Status> {
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         let db = self
             .repo
-            .update_budget(budget_id, name, budget_type, user_id)
+            .update_budget(budget_id, name, budget_type, is_private, user_id)
             .await
             .map_err(Self::internal)?;
         Ok(map_budget(db))
