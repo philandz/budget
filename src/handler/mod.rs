@@ -8,6 +8,7 @@ use crate::pb::service::budget::{
     AddPriceSnapshotRequest, BudgetRole, BudgetType, CheckRoleRequest, CheckRoleResponse,
     CreateBudgetRequest, CreateBudgetResponse, CreateInvestAssetRequest, DeleteBudgetRequest,
     DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse,
+    ForceCloseBudgetRequest, ForceCloseBudgetResponse,
     GetBudgetAdminRequest, GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse,
     GetBurnRateRequest, GetBurnRateResponse, GetInvestPortfolioSummaryRequest,
     GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest, GetRolloverPolicyResponse,
@@ -139,6 +140,15 @@ impl BudgetService for BudgetHandler {
             .delete_budget(&user_id, &req.budget_id, user_type.as_deref())
             .await?;
         Ok(Response::new(DeleteBudgetResponse { success: true }))
+    }
+
+    async fn force_close_budget(
+        &self,
+        request: Request<ForceCloseBudgetRequest>,
+    ) -> Result<Response<ForceCloseBudgetResponse>, Status> {
+        let req = request.into_inner();
+        let budget = self.biz.force_close_budget(&req.budget_id).await?;
+        Ok(Response::new(ForceCloseBudgetResponse { budget: Some(budget) }))
     }
 
     async fn list_budgets(

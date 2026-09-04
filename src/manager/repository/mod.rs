@@ -235,6 +235,14 @@ impl BudgetRepository {
         Ok(())
     }
 
+    pub async fn force_close_budget(&self, budget_id: &str) -> Result<()> {
+        let now = now_unix();
+        sqlx::query("UPDATE budgets SET status = 'closed', updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+            .bind(now).bind(budget_id)
+            .execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn list_budgets_for_user(
         &self,
         org_id: &str,

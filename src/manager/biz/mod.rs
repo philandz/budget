@@ -196,6 +196,17 @@ impl BudgetBiz {
             .map_err(Self::internal)
     }
 
+    pub async fn force_close_budget(&self, budget_id: &str) -> Result<Budget, Status> {
+        // Verify budget exists
+        let _db = self.repo.get_budget_by_id(budget_id).await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        self.repo.force_close_budget(budget_id).await.map_err(Self::internal)?;
+        // Re-fetch to return updated budget
+        let db = self.repo.get_budget_by_id(budget_id).await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        Ok(map_budget(db))
+    }
+
     pub async fn list_budgets(&self, user_id: &str, org_id: &str) -> Result<Vec<Budget>, Status> {
         let rows = self
             .repo
