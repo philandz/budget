@@ -29,6 +29,10 @@ pub struct DbBudget {
     pub current_spend: Option<i64>,
     // sharing budget visibility
     pub is_private: bool,
+    // real portfolio totals (populated via JOIN with invest_assets for admin list)
+    pub asset_count: Option<i32>,
+    pub total_current_value: Option<i64>,
+    pub total_cost_basis: Option<i64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -138,6 +142,9 @@ pub fn map_budget(db: DbBudget) -> Budget {
         },
         member_count: db.member_count.unwrap_or(0),
         is_private: db.is_private,
+        total_current_value: db.total_current_value.unwrap_or(0),
+        total_cost_basis: db.total_cost_basis.unwrap_or(0),
+        asset_count: db.asset_count.unwrap_or(0),
     }
 }
 

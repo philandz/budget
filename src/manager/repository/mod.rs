@@ -530,7 +530,10 @@ impl BudgetRepository {
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend,
-                  b.is_private
+                  b.is_private,
+                  COALESCE(ia.asset_count, 0) AS asset_count,
+                  COALESCE(ip.total_current_value, 0) AS total_current_value,
+                  COALESCE(ip.total_cost_basis, 0) AS total_cost_basis
                FROM budgets b
                LEFT JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = ''
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -548,6 +551,20 @@ impl BudgetRepository {
                      AND deleted_at IS NULL
                    GROUP BY budget_id
                ) cs ON cs.budget_id = BINARY b.id
+               LEFT JOIN (
+                   SELECT budget_id, COUNT(*) AS asset_count
+                   FROM invest_assets
+                   WHERE deleted_at IS NULL
+                   GROUP BY budget_id
+               ) ia ON ia.budget_id = BINARY b.id
+               LEFT JOIN (
+                   SELECT budget_id,
+                          SUM(COALESCE(current_value, 0)) AS total_current_value,
+                          SUM(COALESCE(cost_basis, 0)) AS total_cost_basis
+                   FROM invest_assets
+                   WHERE deleted_at IS NULL
+                   GROUP BY budget_id
+               ) ip ON ip.budget_id = BINARY b.id
                WHERE b.deleted_at IS NULL{}{}{}
                ORDER BY b.created_at DESC
                LIMIT ? OFFSET ?"#,

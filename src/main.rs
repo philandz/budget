@@ -58,7 +58,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Identity gRPC client connected to {}", identity_url);
 
     let biz = Arc::new(BudgetBiz::new(repo, config.clone(), identity_client));
-    let grpc_handler = BudgetHandler::new(biz.clone());
+
+    // Wire Portfolio service in front of the same Budget repository pool.
 
     // Wire Portfolio service in front of the same Budget repository pool.
     // The identity client and BudgetBiz are shared so role resolution uses
@@ -85,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         fx_svc.clone(),
     ));
     let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
+    let grpc_handler = BudgetHandler::new(biz.clone(), portfolio_biz.clone());
 
     // Reuse the same pool for the scheduled refresh job.
     let portfolio_refresh_repo = portfolio_repo.clone();

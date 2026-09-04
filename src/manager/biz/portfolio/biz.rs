@@ -1178,6 +1178,189 @@ impl PortfolioBiz {
         tx.commit().await.map_err(internal)?;
         Ok(count as i32)
     }
+
+    /// Force-refresh: fetch current prices from live providers for all gold and
+    /// stock assets in the given budget, insert price observations, then
+    /// recompute and return the portfolio summary.
+    ///
+    /// This replicates the RefreshJob.tick() logic for a single budget on demand.
+    pub async fn refresh_portfolio(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<pb::PortfolioSnapshot, Status> {
+        self.assert_member(budget_id, user_id, user_type).await?;
+
+        // Fetch all active gold and stock assets for this budget.
+        let mut tx = self.repo.begin().await.map_err(internal)?;
+        let assets = self.repo.list_active_for_refresh_by_budget(&mut tx, budget_id).await.map_err(internal)?;
+        tx.commit().await.map_err(internal)?;
+        if assets.is_empty() {
+            // No live-priced assets; return empty summary.
+            return Ok(pb::PortfolioSnapshot {
+                budget_id: budget_id.to_string(),
+                total_current_value: 0,
+                total_open_cost_basis: 0,
+                total_realized_pnl: 0,
+                total_unrealized_pnl: 0,
+                total_return_pct: 0.0,
+                currency: "VND".to_string(),
+                assets: vec![],
+            });
+        }
+
+        // Build a provider registry (same flags as RefreshJob).
+        let registry = {
+            use crate::manager::biz::portfolio::providers::SharedProviderRegistry;
+            SharedProviderRegistry::new_with_noop()
+        };
+        // Gate provider flags match RefreshJob::build_registry().
+        if std::env::var("PORTFOLIO_ENABLE_SJC").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+            use crate::manager::biz::portfolio::providers::SjcProvider;
+            registry.add(std::sync::Arc::new(SjcProvider::new()));
+        }
+        if std::env::var("PORTFOLIO_ENABLE_DOJI").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+            use crate::manager::biz::portfolio::providers::DojiProvider;
+            registry.add(std::sync::Arc::new(DojiProvider::new()));
+        }
+        if std::env::var("PORTFOLIO_ENABLE_PNJ").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+            use crate::manager::biz::portfolio::providers::PnjProvider;
+            registry.add(std::sync::Arc::new(PnjProvider::new()));
+        }
+        if std::env::var("PORTFOLIO_ENABLE_HOSE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+            use crate::manager::biz::portfolio::providers::HoseProvider;
+            registry.add(std::sync::Arc::new(HoseProvider::new()));
+        }
+        if std::env::var("PORTFOLIO_ENABLE_HNX").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+            use crate::manager::biz::portfolio::providers::HnxProvider;
+            registry.add(std::sync::Arc::new(HnxProvider::new()));
+        }
+        if std::env::var("PORTFOLIO_ENABLE_UPCOM").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+            use crate::manager::biz::portfolio::providers::UpcomProvider;
+            registry.add(std::sync::Arc::new(UpcomProvider::new()));
+        }
+
+        // Short-circuit if only noop provider is registered (no live prices).
+        if registry.is_noop_only() {
+            tracing::debug!("refresh_portfolio: no live providers; skipping fetch");
+            return self
+                .get_portfolio_summary(user_id, budget_id, user_type)
+                .await
+                .map(|s| pb::PortfolioSnapshot {
+                    budget_id: s.budget_id,
+                    total_current_value: s.total_current_value,
+                    total_open_cost_basis: s.total_open_cost_basis,
+                    total_realized_pnl: s.total_realized_pnl,
+                    total_unrealized_pnl: s.total_unrealized_pnl,
+                    total_return_pct: s.total_return_pct,
+                    currency: s.currency,
+                    assets: s.assets,
+                });
+        }
+
+        let http = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("refresh_portfolio: failed to build http client: {e}");
+                return self
+                    .get_portfolio_summary(user_id, budget_id, user_type)
+                    .await
+                    .map(|s| pb::PortfolioSnapshot {
+                        budget_id: s.budget_id,
+                        total_current_value: s.total_current_value,
+                        total_open_cost_basis: s.total_open_cost_basis,
+                        total_realized_pnl: s.total_realized_pnl,
+                        total_unrealized_pnl: s.total_unrealized_pnl,
+                        total_return_pct: s.total_return_pct,
+                        currency: s.currency,
+                        assets: s.assets,
+                    });
+            }
+        };
+
+        let proto_assets: Vec<pb::PortfolioAsset> = assets
+            .iter()
+            .cloned()
+            .map(pconv::map_portfolio_asset)
+            .collect();
+        let prices = registry.fetch_all(&http, &proto_assets).await;
+        if prices.is_empty() {
+            tracing::debug!("refresh_portfolio: no prices returned");
+            return self
+                .get_portfolio_summary(user_id, budget_id, user_type)
+                .await
+                .map(|s| pb::PortfolioSnapshot {
+                    budget_id: s.budget_id,
+                    total_current_value: s.total_current_value,
+                    total_open_cost_basis: s.total_open_cost_basis,
+                    total_realized_pnl: s.total_realized_pnl,
+                    total_unrealized_pnl: s.total_unrealized_pnl,
+                    total_return_pct: s.total_return_pct,
+                    currency: s.currency,
+                    assets: s.assets,
+                });
+        }
+
+        // Build asset_id → currency lookup.
+        let asset_currency: std::collections::HashMap<&str, &str> = assets
+            .iter()
+            .map(|a| (a.id.as_str(), a.currency.as_str()))
+            .collect();
+
+        let mut tx = self.repo.begin().await.map_err(internal)?;
+        let now = now_unix();
+        for price in &prices {
+            let currency = asset_currency
+                .get(price.asset_id.as_str())
+                .copied()
+                .unwrap_or("VND");
+            let obs = pconv::NewPriceObservation {
+                id: None,
+                asset_id: price.asset_id.clone(),
+                provider: price.provider.clone(),
+                price_side: match price.price_side {
+                    "bid" => crate::manager::biz::portfolio::PriceSide::Bid,
+                    "ask" => crate::manager::biz::portfolio::PriceSide::Ask,
+                    _ => crate::manager::biz::portfolio::PriceSide::Mid,
+                },
+                unit_price: price.unit_price,
+                currency: currency.into(),
+                observed_at: now,
+                source_reference: price.source_reference.clone(),
+                idempotency_key: Some(format!("manual:{}:{}", now, price.asset_id)),
+                notes: if price.notes.is_empty() {
+                    None
+                } else {
+                    Some(price.notes.clone())
+                },
+            };
+            // Best-effort insert; dedup is handled by the idempotency key.
+            let _ = self
+                .repo
+                .insert_price_observation(&mut tx, &obs)
+                .await
+                .map_err(internal);
+        }
+        tx.commit().await.map_err(internal)?;
+
+        // Return fresh summary (opens a new transaction to see committed observations).
+        self.get_portfolio_summary(user_id, budget_id, user_type)
+            .await
+            .map(|s| pb::PortfolioSnapshot {
+                budget_id: s.budget_id,
+                total_current_value: s.total_current_value,
+                total_open_cost_basis: s.total_open_cost_basis,
+                total_realized_pnl: s.total_realized_pnl,
+                total_unrealized_pnl: s.total_unrealized_pnl,
+                total_return_pct: s.total_return_pct,
+                currency: s.currency,
+                assets: s.assets,
+            })
+    }
 }
 
 fn internal<E: ToString>(e: E) -> Status {
