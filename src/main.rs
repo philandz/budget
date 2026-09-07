@@ -91,6 +91,35 @@ async fn main() -> anyhow::Result<()> {
     // Reuse the same pool for the scheduled refresh job.
     let portfolio_refresh_repo = portfolio_repo.clone();
 
+    // Wire Portfolio service in front of the same Budget repository pool.
+    // The identity client and BudgetBiz are shared so role resolution uses
+    // the same logic as the existing service.
+    let portfolio_pool = sqlx::MySqlPool::connect(&config.database_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open portfolio pool: {e}"))?;
+    let portfolio_repo = Arc::new(PortfolioRepository::new(portfolio_pool.clone()));
+    let fx_svc = Arc::new(
+        FxRateService::new(portfolio_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
+    );
+    let portfolio_biz = Arc::new(PortfolioBiz::new(
+        (*portfolio_repo).clone(),
+        IdentityClient::from_channel(
+            philand_application::connect::connect_default(&identity_url)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
+                })?,
+        ),
+        biz.clone(),
+        fx_svc.clone(),
+    ));
+    let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
+
+    // Reuse the same pool for the scheduled refresh job.
+    let portfolio_refresh_repo = portfolio_repo.clone();
+
     // gRPC server
     let grpc_addr: SocketAddr = format!("{}:{}", config.grpc_host, config.grpc_port).parse()?;
     let grpc_server = tonic::transport::Server::builder()
