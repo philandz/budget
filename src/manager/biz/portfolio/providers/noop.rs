@@ -34,14 +34,13 @@ impl NoopProvider {
             return HashMap::new();
         };
         // JSON map: {"SJC9999": 7500000, "DOJI9999": 7400000}
-        let map: serde_json::Map<String, serde_json::Value> =
-            match serde_json::from_str(&json) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!("noop: invalid PORTFOLIO_TEST_GOLD_PRICE JSON: {e}");
-                    return HashMap::new();
-                }
-            };
+        let map: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(&json) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("noop: invalid PORTFOLIO_TEST_GOLD_PRICE JSON: {e}");
+                return HashMap::new();
+            }
+        };
         let mut result = HashMap::new();
         for (k, v) in map {
             let price = v.as_i64().unwrap_or(0);

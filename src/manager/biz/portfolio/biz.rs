@@ -1194,7 +1194,11 @@ impl PortfolioBiz {
 
         // Fetch all active gold and stock assets for this budget.
         let mut tx = self.repo.begin().await.map_err(internal)?;
-        let assets = self.repo.list_active_for_refresh_by_budget(&mut tx, budget_id).await.map_err(internal)?;
+        let assets = self
+            .repo
+            .list_active_for_refresh_by_budget(&mut tx, budget_id)
+            .await
+            .map_err(internal)?;
         tx.commit().await.map_err(internal)?;
         if assets.is_empty() {
             // No live-priced assets; return empty summary.
@@ -1216,27 +1220,39 @@ impl PortfolioBiz {
             SharedProviderRegistry::new_with_noop()
         };
         // Gate provider flags match RefreshJob::build_registry().
-        if std::env::var("PORTFOLIO_ENABLE_SJC").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        if std::env::var("PORTFOLIO_ENABLE_SJC")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
             use crate::manager::biz::portfolio::providers::SjcProvider;
             registry.add(std::sync::Arc::new(SjcProvider::new()));
         }
-        if std::env::var("PORTFOLIO_ENABLE_DOJI").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        if std::env::var("PORTFOLIO_ENABLE_DOJI")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
             use crate::manager::biz::portfolio::providers::DojiProvider;
             registry.add(std::sync::Arc::new(DojiProvider::new()));
         }
-        if std::env::var("PORTFOLIO_ENABLE_PNJ").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        if std::env::var("PORTFOLIO_ENABLE_PNJ")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
             use crate::manager::biz::portfolio::providers::PnjProvider;
             registry.add(std::sync::Arc::new(PnjProvider::new()));
         }
-        if std::env::var("PORTFOLIO_ENABLE_HOSE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        if std::env::var("PORTFOLIO_ENABLE_HOSE")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
             use crate::manager::biz::portfolio::providers::HoseProvider;
             registry.add(std::sync::Arc::new(HoseProvider::new()));
         }
-        if std::env::var("PORTFOLIO_ENABLE_HNX").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        if std::env::var("PORTFOLIO_ENABLE_HNX")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
             use crate::manager::biz::portfolio::providers::HnxProvider;
             registry.add(std::sync::Arc::new(HnxProvider::new()));
         }
-        if std::env::var("PORTFOLIO_ENABLE_UPCOM").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        if std::env::var("PORTFOLIO_ENABLE_UPCOM")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
             use crate::manager::biz::portfolio::providers::UpcomProvider;
             registry.add(std::sync::Arc::new(UpcomProvider::new()));
         }

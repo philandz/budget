@@ -254,12 +254,10 @@ impl BudgetRepository {
         .await?;
 
         // Soft-delete budget_members
-        sqlx::query(
-            "DELETE FROM budget_members WHERE budget_id = ?",
-        )
-        .bind(budget_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM budget_members WHERE budget_id = ?")
+            .bind(budget_id)
+            .execute(&self.pool)
+            .await?;
 
         // -----------------------------------------------------------------------
         // Sharing cascade: soft-delete expenses, hard-delete orphaned legs, revoke participants, clean up
@@ -294,36 +292,28 @@ impl BudgetRepository {
         .await?;
 
         // Hard-delete sharing_balances
-        sqlx::query(
-            "DELETE FROM sharing_balances WHERE budget_id = ?",
-        )
-        .bind(budget_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM sharing_balances WHERE budget_id = ?")
+            .bind(budget_id)
+            .execute(&self.pool)
+            .await?;
 
         // Hard-delete sharing_join_links
-        sqlx::query(
-            "DELETE FROM sharing_join_links WHERE budget_id = ?",
-        )
-        .bind(budget_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM sharing_join_links WHERE budget_id = ?")
+            .bind(budget_id)
+            .execute(&self.pool)
+            .await?;
 
         // Hard-delete sharing_settlement_confirmations
-        sqlx::query(
-            "DELETE FROM sharing_settlement_confirmations WHERE budget_id = ?",
-        )
-        .bind(budget_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM sharing_settlement_confirmations WHERE budget_id = ?")
+            .bind(budget_id)
+            .execute(&self.pool)
+            .await?;
 
         // Hard-delete sharing_activity_log
-        sqlx::query(
-            "DELETE FROM sharing_activity_log WHERE budget_id = ?",
-        )
-        .bind(budget_id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM sharing_activity_log WHERE budget_id = ?")
+            .bind(budget_id)
+            .execute(&self.pool)
+            .await?;
 
         // Finally, soft-delete the budget itself
         sqlx::query(

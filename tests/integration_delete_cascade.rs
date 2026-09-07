@@ -24,7 +24,13 @@ async fn make_repo() -> BudgetRepository {
 async fn seed_sharing_budget(org_id: &str, user_id: &str) -> String {
     let repo = make_repo().await;
     let budget = repo
-        .create_budget(org_id, "Sharing Cascade Test", BudgetType::Sharing, "VND", user_id)
+        .create_budget(
+            org_id,
+            "Sharing Cascade Test",
+            BudgetType::Sharing,
+            "VND",
+            user_id,
+        )
         .await
         .expect("seed_sharing_budget failed");
     budget.id
@@ -34,7 +40,13 @@ async fn seed_sharing_budget(org_id: &str, user_id: &str) -> String {
 async fn seed_invest_budget(org_id: &str, user_id: &str) -> String {
     let repo = make_repo().await;
     let budget = repo
-        .create_budget(org_id, "Invest Cascade Test", BudgetType::Invest, "VND", user_id)
+        .create_budget(
+            org_id,
+            "Invest Cascade Test",
+            BudgetType::Invest,
+            "VND",
+            user_id,
+        )
         .await
         .expect("seed_invest_budget failed");
     budget.id
@@ -144,8 +156,7 @@ async fn insert_invest_assets(pool: &MySqlPool, budget_id: &str, user_id: &str) 
 #[tokio::test]
 #[ignore = "requires DATABASE_URL; run with `--ignored`"]
 async fn sharing_budget_delete_cascades_to_participants() {
-    let url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
     let pool = MySqlPool::connect(&url).await.expect("connect");
 
     // Run migrations
@@ -187,7 +198,10 @@ async fn sharing_budget_delete_cascades_to_participants() {
     .fetch_one(&pool)
     .await
     .expect("pre-check participants failed");
-    assert_eq!(pre_participants.0, 2, "should have 2 participants before delete");
+    assert_eq!(
+        pre_participants.0, 2,
+        "should have 2 participants before delete"
+    );
 
     let pre_expenses: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM sharing_expenses WHERE budget_id = ? AND deleted_at IS NULL",
@@ -205,13 +219,12 @@ async fn sharing_budget_delete_cascades_to_participants() {
         .expect("delete_budget failed");
 
     // Verify budget is soft-deleted
-    let budget_deleted: Option<(i64,)> = sqlx::query_as(
-        "SELECT deleted_at FROM budgets WHERE id = ?",
-    )
-    .bind(&budget_id)
-    .fetch_optional(&pool)
-    .await
-    .expect("check budget deleted_at failed");
+    let budget_deleted: Option<(i64,)> =
+        sqlx::query_as("SELECT deleted_at FROM budgets WHERE id = ?")
+            .bind(&budget_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("check budget deleted_at failed");
     assert!(
         budget_deleted.is_some(),
         "budget should be soft-deleted (deleted_at set)"
@@ -257,13 +270,12 @@ async fn sharing_budget_delete_cascades_to_participants() {
     );
 
     // Verify budget_members are soft-deleted
-    let post_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM budget_members WHERE budget_id = ?",
-    )
-    .bind(&budget_id)
-    .fetch_one(&pool)
-    .await
-    .expect("post-check members failed");
+    let post_members: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM budget_members WHERE budget_id = ?")
+            .bind(&budget_id)
+            .fetch_one(&pool)
+            .await
+            .expect("post-check members failed");
     assert_eq!(
         post_members.0, 0,
         "budget_members should be soft-deleted after budget delete"
@@ -277,8 +289,7 @@ async fn sharing_budget_delete_cascades_to_participants() {
 #[tokio::test]
 #[ignore = "requires DATABASE_URL; run with `--ignored`"]
 async fn invest_budget_delete_cascades_to_assets() {
-    let url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for --ignored tests");
     let pool = MySqlPool::connect(&url).await.expect("connect");
 
     // Run migrations
@@ -326,17 +337,13 @@ async fn invest_budget_delete_cascades_to_assets() {
         .expect("delete_budget failed");
 
     // Verify budget is soft-deleted
-    let budget_deleted: Option<(i64,)> = sqlx::query_as(
-        "SELECT deleted_at FROM budgets WHERE id = ?",
-    )
-    .bind(&budget_id)
-    .fetch_optional(&pool)
-    .await
-    .expect("check budget deleted_at failed");
-    assert!(
-        budget_deleted.is_some(),
-        "budget should be soft-deleted"
-    );
+    let budget_deleted: Option<(i64,)> =
+        sqlx::query_as("SELECT deleted_at FROM budgets WHERE id = ?")
+            .bind(&budget_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("check budget deleted_at failed");
+    assert!(budget_deleted.is_some(), "budget should be soft-deleted");
 
     // Verify invest_assets are soft-deleted (cascade)
     let post_assets: (i64,) = sqlx::query_as(
@@ -352,13 +359,12 @@ async fn invest_budget_delete_cascades_to_assets() {
     );
 
     // Verify budget_members are soft-deleted
-    let post_members: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM budget_members WHERE budget_id = ?",
-    )
-    .bind(&budget_id)
-    .fetch_one(&pool)
-    .await
-    .expect("post-check members failed");
+    let post_members: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM budget_members WHERE budget_id = ?")
+            .bind(&budget_id)
+            .fetch_one(&pool)
+            .await
+            .expect("post-check members failed");
     assert_eq!(
         post_members.0, 0,
         "budget_members should be soft-deleted after budget delete"

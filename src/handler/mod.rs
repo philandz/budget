@@ -1,28 +1,27 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
-use crate::manager::biz::BudgetBiz;
 use crate::manager::biz::portfolio::biz::PortfolioBiz;
+use crate::manager::biz::BudgetBiz;
 use crate::manager::validate;
 use crate::pb::service::budget::{
     budget_service_server::BudgetService, AddBudgetMemberRequest, AddBudgetMemberResponse,
     AddPriceSnapshotRequest, BudgetRole, BudgetType, CheckRoleRequest, CheckRoleResponse,
     CreateBudgetRequest, CreateBudgetResponse, CreateInvestAssetRequest, DeleteBudgetRequest,
     DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse,
-    ForceCloseBudgetRequest, ForceCloseBudgetResponse,
-    GetBudgetAdminRequest, GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse,
-    GetBurnRateRequest, GetBurnRateResponse, GetInvestPortfolioSummaryRequest,
-    GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest, GetRolloverPolicyResponse,
-    InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
-    ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse,
-    ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest, ListBudgetsResponse,
-    ListInvestAssetsRequest, ListInvestAssetsResponse, ListPriceSnapshotsRequest,
-    ListPriceSnapshotsResponse, ListTemplatesRequest, ListTemplatesResponse, PriceSnapshot,
-    PortfolioSnapshot, RefreshPortfolioRequest, RefreshPortfolioResponse,
-    RemoveBudgetMemberRequest, RemoveBudgetMemberResponse, SetEnvelopeLimitRequest,
-    SetEnvelopeLimitResponse, SetRolloverPolicyRequest, SetRolloverPolicyResponse,
-    UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse, UpdateBudgetRequest,
-    UpdateBudgetResponse, UpdateInvestAssetRequest,
+    ForceCloseBudgetRequest, ForceCloseBudgetResponse, GetBudgetAdminRequest,
+    GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse, GetBurnRateRequest,
+    GetBurnRateResponse, GetInvestPortfolioSummaryRequest, GetLatestPriceSnapshotRequest,
+    GetRolloverPolicyRequest, GetRolloverPolicyResponse, InvestAsset, InvestPortfolioSummary,
+    ListBudgetMembersAdminRequest, ListBudgetMembersAdminResponse, ListBudgetMembersRequest,
+    ListBudgetMembersResponse, ListBudgetsAdminRequest, ListBudgetsAdminResponse,
+    ListBudgetsRequest, ListBudgetsResponse, ListInvestAssetsRequest, ListInvestAssetsResponse,
+    ListPriceSnapshotsRequest, ListPriceSnapshotsResponse, ListTemplatesRequest,
+    ListTemplatesResponse, PortfolioSnapshot, PriceSnapshot, RefreshPortfolioRequest,
+    RefreshPortfolioResponse, RemoveBudgetMemberRequest, RemoveBudgetMemberResponse,
+    SetEnvelopeLimitRequest, SetEnvelopeLimitResponse, SetRolloverPolicyRequest,
+    SetRolloverPolicyResponse, UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse,
+    UpdateBudgetRequest, UpdateBudgetResponse, UpdateInvestAssetRequest,
 };
 
 pub struct BudgetHandler {
@@ -151,7 +150,9 @@ impl BudgetService for BudgetHandler {
     ) -> Result<Response<ForceCloseBudgetResponse>, Status> {
         let req = request.into_inner();
         let budget = self.biz.force_close_budget(&req.budget_id).await?;
-        Ok(Response::new(ForceCloseBudgetResponse { budget: Some(budget) }))
+        Ok(Response::new(ForceCloseBudgetResponse {
+            budget: Some(budget),
+        }))
     }
 
     async fn list_budgets(
@@ -473,7 +474,9 @@ impl BudgetService for BudgetHandler {
             total_return_pct: portfolio_snapshot.total_return_pct,
             currency: portfolio_snapshot.currency,
         };
-        Ok(Response::new(RefreshPortfolioResponse { snapshot: Some(snapshot) }))
+        Ok(Response::new(RefreshPortfolioResponse {
+            snapshot: Some(snapshot),
+        }))
     }
 
     async fn add_price_snapshot(
