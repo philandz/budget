@@ -324,6 +324,19 @@ message PortfolioSummary {
   repeated ValuatedAsset assets = 8;
 }
 
+/// Identical to PortfolioSummary — used by the budget service's
+/// RefreshPortfolio RPC to return the post-refresh state.
+message PortfolioSnapshot {
+  string budget_id = 1;
+  int64 total_current_value = 2;
+  int64 total_open_cost_basis = 3;
+  int64 total_realized_pnl = 4;
+  int64 total_unrealized_pnl = 5;
+  double total_return_pct = 6;
+  string currency = 7;
+  repeated ValuatedAsset assets = 8;
+}
+
 // ---------------------------------------------------------------------------
 // Request/response messages
 // ---------------------------------------------------------------------------

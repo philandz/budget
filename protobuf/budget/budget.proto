@@ -51,6 +51,7 @@ message Budget {
   int64  current_spend  = 8;   // spend so far this month
   double burn_rate_pct   = 9;   // projected % of limit consumed (0-100+)
   int32  member_count    = 10;  // number of members in this budget
+  bool   is_private       = 11; // sharing budget visibility flag
 }
 
 message BudgetMember {
@@ -101,6 +102,7 @@ message UpdateBudgetRequest {
   string budget_id   = 1;
   string name        = 2;
   BudgetType budget_type = 3;
+  bool is_private    = 4;
 }
 message UpdateBudgetResponse { Budget budget = 1; }
 
@@ -190,6 +192,13 @@ message ListBudgetMembersResponse { repeated BudgetMember members = 1; }
 // Admin: list budget members (super_admin only)
 message ListBudgetMembersAdminRequest { string budget_id = 1; }
 message ListBudgetMembersAdminResponse { repeated BudgetMember members = 1; }
+
+// ---------------------------------------------------------------------------
+// Force-close
+// ---------------------------------------------------------------------------
+
+message ForceCloseBudgetRequest { string budget_id = 1; }
+message ForceCloseBudgetResponse { Budget budget = 1; }
 
 // ---------------------------------------------------------------------------
 // Envelope limits & burn-rate
@@ -289,6 +298,17 @@ message InvestPortfolioSummary {
   repeated InvestAsset assets  = 6;
 }
 
+// RefreshPortfolio response payload — mirrors service.portfolio.PortfolioSummary
+message PortfolioSnapshot {
+  string budget_id               = 1;
+  int64  total_current_value     = 2;
+  int64  total_open_cost_basis   = 3;
+  int64  total_realized_pnl      = 4;
+  int64  total_unrealized_pnl    = 5;
+  double total_return_pct        = 6;
+  string currency                = 7;
+}
+
 message PriceSnapshot {
   string id            = 1;
   string asset_id      = 2;
@@ -381,6 +401,21 @@ service BudgetService {
   rpc GetBudgetAdmin(GetBudgetAdminRequest) returns (GetBudgetAdminResponse) {}
   // Admin: list budget members (super_admin only)
   rpc ListBudgetMembersAdmin(ListBudgetMembersAdminRequest) returns (ListBudgetMembersAdminResponse) {}
+
+  // Force-close: sets budget status to 'closed' immediately (admin only)
+  rpc ForceCloseBudget(ForceCloseBudgetRequest) returns (ForceCloseBudgetResponse) {}
+
+  message ForceCloseBudgetRequest  { string budget_id = 1; }
+  message ForceCloseBudgetResponse { InvestPortfolioSummary summary = 1; }
+
+  rpc RefreshPortfolio(RefreshPortfolioRequest) returns (RefreshPortfolioResponse) {
+    option (google.api.http) = {
+      post: "/budgets/{budget_id}/portfolio/refresh"
+      body: "*"
+    };
+  }
+  message RefreshPortfolioRequest  { string budget_id = 1; }
+  message RefreshPortfolioResponse { PortfolioSnapshot snapshot = 1; }
 
   // Role authority (internal — no public HTTP binding)
   rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}

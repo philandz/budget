@@ -169,13 +169,14 @@ impl BudgetBiz {
         budget_id: &str,
         name: &str,
         budget_type: BudgetType,
+        is_private: bool,
         user_type: Option<&str>,
     ) -> Result<Budget, Status> {
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         let db = self
             .repo
-            .update_budget(budget_id, name, budget_type, user_id)
+            .update_budget(budget_id, name, budget_type, is_private, user_id)
             .await
             .map_err(Self::internal)?;
         Ok(map_budget(db))
@@ -190,9 +191,29 @@ impl BudgetBiz {
         self.assert_min_role(budget_id, user_id, BudgetRole::Owner, user_type)
             .await?;
         self.repo
-            .delete_budget(budget_id)
+            .delete_budget_cascade(budget_id)
             .await
             .map_err(Self::internal)
+    }
+
+    pub async fn force_close_budget(&self, budget_id: &str) -> Result<Budget, Status> {
+        // Verify budget exists
+        let _db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        self.repo
+            .force_close_budget(budget_id)
+            .await
+            .map_err(Self::internal)?;
+        // Re-fetch to return updated budget
+        let db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        Ok(map_budget(db))
     }
 
     pub async fn list_budgets(&self, user_id: &str, org_id: &str) -> Result<Vec<Budget>, Status> {

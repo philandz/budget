@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
+use crate::manager::biz::portfolio::biz::PortfolioBiz;
 use crate::manager::biz::BudgetBiz;
 use crate::manager::validate;
 use crate::pb::service::budget::{
@@ -8,27 +9,29 @@ use crate::pb::service::budget::{
     AddPriceSnapshotRequest, BudgetRole, BudgetType, CheckRoleRequest, CheckRoleResponse,
     CreateBudgetRequest, CreateBudgetResponse, CreateInvestAssetRequest, DeleteBudgetRequest,
     DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse,
-    GetBudgetAdminRequest, GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse,
-    GetBurnRateRequest, GetBurnRateResponse, GetInvestPortfolioSummaryRequest,
-    GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest, GetRolloverPolicyResponse,
-    InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
-    ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse,
-    ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest, ListBudgetsResponse,
-    ListInvestAssetsRequest, ListInvestAssetsResponse, ListPriceSnapshotsRequest,
-    ListPriceSnapshotsResponse, ListTemplatesRequest, ListTemplatesResponse, PriceSnapshot,
-    RemoveBudgetMemberRequest, RemoveBudgetMemberResponse, SetEnvelopeLimitRequest,
-    SetEnvelopeLimitResponse, SetRolloverPolicyRequest, SetRolloverPolicyResponse,
-    UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse, UpdateBudgetRequest,
-    UpdateBudgetResponse, UpdateInvestAssetRequest,
+    ForceCloseBudgetRequest, ForceCloseBudgetResponse, GetBudgetAdminRequest,
+    GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse, GetBurnRateRequest,
+    GetBurnRateResponse, GetInvestPortfolioSummaryRequest, GetLatestPriceSnapshotRequest,
+    GetRolloverPolicyRequest, GetRolloverPolicyResponse, InvestAsset, InvestPortfolioSummary,
+    ListBudgetMembersAdminRequest, ListBudgetMembersAdminResponse, ListBudgetMembersRequest,
+    ListBudgetMembersResponse, ListBudgetsAdminRequest, ListBudgetsAdminResponse,
+    ListBudgetsRequest, ListBudgetsResponse, ListInvestAssetsRequest, ListInvestAssetsResponse,
+    ListPriceSnapshotsRequest, ListPriceSnapshotsResponse, ListTemplatesRequest,
+    ListTemplatesResponse, PortfolioSnapshot, PriceSnapshot, RefreshPortfolioRequest,
+    RefreshPortfolioResponse, RemoveBudgetMemberRequest, RemoveBudgetMemberResponse,
+    SetEnvelopeLimitRequest, SetEnvelopeLimitResponse, SetRolloverPolicyRequest,
+    SetRolloverPolicyResponse, UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse,
+    UpdateBudgetRequest, UpdateBudgetResponse, UpdateInvestAssetRequest,
 };
 
 pub struct BudgetHandler {
     biz: Arc<BudgetBiz>,
+    portfolio_biz: Arc<PortfolioBiz>,
 }
 
 impl BudgetHandler {
-    pub fn new(biz: Arc<BudgetBiz>) -> Self {
-        Self { biz }
+    pub fn new(biz: Arc<BudgetBiz>, portfolio_biz: Arc<PortfolioBiz>) -> Self {
+        Self { biz, portfolio_biz }
     }
 }
 
@@ -119,6 +122,7 @@ impl BudgetService for BudgetHandler {
                 &req.budget_id,
                 &req.name,
                 budget_type,
+                req.is_private,
                 user_type.as_deref(),
             )
             .await?;
@@ -138,6 +142,17 @@ impl BudgetService for BudgetHandler {
             .delete_budget(&user_id, &req.budget_id, user_type.as_deref())
             .await?;
         Ok(Response::new(DeleteBudgetResponse { success: true }))
+    }
+
+    async fn force_close_budget(
+        &self,
+        request: Request<ForceCloseBudgetRequest>,
+    ) -> Result<Response<ForceCloseBudgetResponse>, Status> {
+        let req = request.into_inner();
+        let budget = self.biz.force_close_budget(&req.budget_id).await?;
+        Ok(Response::new(ForceCloseBudgetResponse {
+            budget: Some(budget),
+        }))
     }
 
     async fn list_budgets(
@@ -436,6 +451,32 @@ impl BudgetService for BudgetHandler {
             .get_invest_portfolio_summary(&user_id, &req.budget_id, user_type.as_deref())
             .await?;
         Ok(Response::new(summary))
+    }
+
+    async fn refresh_portfolio(
+        &self,
+        request: Request<RefreshPortfolioRequest>,
+    ) -> Result<Response<RefreshPortfolioResponse>, Status> {
+        let caller_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        let portfolio_snapshot = self
+            .portfolio_biz
+            .refresh_portfolio(&caller_id, &req.budget_id, user_type.as_deref())
+            .await?;
+        // Map from portfolio-proto PortfolioSnapshot to budget-proto PortfolioSnapshot.
+        let snapshot = PortfolioSnapshot {
+            budget_id: portfolio_snapshot.budget_id,
+            total_current_value: portfolio_snapshot.total_current_value,
+            total_open_cost_basis: portfolio_snapshot.total_open_cost_basis,
+            total_realized_pnl: portfolio_snapshot.total_realized_pnl,
+            total_unrealized_pnl: portfolio_snapshot.total_unrealized_pnl,
+            total_return_pct: portfolio_snapshot.total_return_pct,
+            currency: portfolio_snapshot.currency,
+        };
+        Ok(Response::new(RefreshPortfolioResponse {
+            snapshot: Some(snapshot),
+        }))
     }
 
     async fn add_price_snapshot(
