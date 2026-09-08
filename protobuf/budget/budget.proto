@@ -298,6 +298,17 @@ message InvestPortfolioSummary {
   repeated InvestAsset assets  = 6;
 }
 
+// RefreshPortfolio response payload — mirrors service.portfolio.PortfolioSummary
+message PortfolioSnapshot {
+  string budget_id               = 1;
+  int64  total_current_value     = 2;
+  int64  total_open_cost_basis   = 3;
+  int64  total_realized_pnl      = 4;
+  int64  total_unrealized_pnl    = 5;
+  double total_return_pct        = 6;
+  string currency                = 7;
+}
+
 message PriceSnapshot {
   string id            = 1;
   string asset_id      = 2;
@@ -393,6 +404,18 @@ service BudgetService {
 
   // Force-close: sets budget status to 'closed' immediately (admin only)
   rpc ForceCloseBudget(ForceCloseBudgetRequest) returns (ForceCloseBudgetResponse) {}
+
+  message ForceCloseBudgetRequest  { string budget_id = 1; }
+  message ForceCloseBudgetResponse { InvestPortfolioSummary summary = 1; }
+
+  rpc RefreshPortfolio(RefreshPortfolioRequest) returns (RefreshPortfolioResponse) {
+    option (google.api.http) = {
+      post: "/budgets/{budget_id}/portfolio/refresh"
+      body: "*"
+    };
+  }
+  message RefreshPortfolioRequest  { string budget_id = 1; }
+  message RefreshPortfolioResponse { PortfolioSnapshot snapshot = 1; }
 
   // Role authority (internal — no public HTTP binding)
   rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}

@@ -19,7 +19,7 @@ use crate::manager::biz::portfolio::{
 use crate::manager::client::IdentityClient;
 use crate::manager::repository::fx_rates::FxRateService;
 use crate::manager::repository::portfolio::PortfolioRepository;
-use crate::pb::service::budget::BudgetRole;
+use crate::pb::service::budget::{BudgetRole, PortfolioSnapshot as RefreshPortfolioSnapshot};
 use crate::pb::service::portfolio as pb;
 use philand_time::now_unix;
 
@@ -1189,7 +1189,7 @@ impl PortfolioBiz {
         user_id: &str,
         budget_id: &str,
         user_type: Option<&str>,
-    ) -> Result<pb::PortfolioSnapshot, Status> {
+    ) -> Result<RefreshPortfolioSnapshot, Status> {
         self.assert_member(budget_id, user_id, user_type).await?;
 
         // Fetch all active gold and stock assets for this budget.
@@ -1202,7 +1202,7 @@ impl PortfolioBiz {
         tx.commit().await.map_err(internal)?;
         if assets.is_empty() {
             // No live-priced assets; return empty summary.
-            return Ok(pb::PortfolioSnapshot {
+            return Ok(RefreshPortfolioSnapshot {
                 budget_id: budget_id.to_string(),
                 total_current_value: 0,
                 total_open_cost_basis: 0,
@@ -1210,7 +1210,6 @@ impl PortfolioBiz {
                 total_unrealized_pnl: 0,
                 total_return_pct: 0.0,
                 currency: "VND".to_string(),
-                assets: vec![],
             });
         }
 
@@ -1263,7 +1262,7 @@ impl PortfolioBiz {
             return self
                 .get_portfolio_summary(user_id, budget_id, user_type)
                 .await
-                .map(|s| pb::PortfolioSnapshot {
+                .map(|s| RefreshPortfolioSnapshot {
                     budget_id: s.budget_id,
                     total_current_value: s.total_current_value,
                     total_open_cost_basis: s.total_open_cost_basis,
@@ -1271,7 +1270,6 @@ impl PortfolioBiz {
                     total_unrealized_pnl: s.total_unrealized_pnl,
                     total_return_pct: s.total_return_pct,
                     currency: s.currency,
-                    assets: s.assets,
                 });
         }
 
@@ -1285,7 +1283,7 @@ impl PortfolioBiz {
                 return self
                     .get_portfolio_summary(user_id, budget_id, user_type)
                     .await
-                    .map(|s| pb::PortfolioSnapshot {
+                    .map(|s| RefreshPortfolioSnapshot {
                         budget_id: s.budget_id,
                         total_current_value: s.total_current_value,
                         total_open_cost_basis: s.total_open_cost_basis,
@@ -1293,7 +1291,6 @@ impl PortfolioBiz {
                         total_unrealized_pnl: s.total_unrealized_pnl,
                         total_return_pct: s.total_return_pct,
                         currency: s.currency,
-                        assets: s.assets,
                     });
             }
         };
@@ -1309,7 +1306,7 @@ impl PortfolioBiz {
             return self
                 .get_portfolio_summary(user_id, budget_id, user_type)
                 .await
-                .map(|s| pb::PortfolioSnapshot {
+                .map(|s| RefreshPortfolioSnapshot {
                     budget_id: s.budget_id,
                     total_current_value: s.total_current_value,
                     total_open_cost_basis: s.total_open_cost_basis,
@@ -1317,7 +1314,6 @@ impl PortfolioBiz {
                     total_unrealized_pnl: s.total_unrealized_pnl,
                     total_return_pct: s.total_return_pct,
                     currency: s.currency,
-                    assets: s.assets,
                 });
         }
 
@@ -1366,7 +1362,7 @@ impl PortfolioBiz {
         // Return fresh summary (opens a new transaction to see committed observations).
         self.get_portfolio_summary(user_id, budget_id, user_type)
             .await
-            .map(|s| pb::PortfolioSnapshot {
+            .map(|s| RefreshPortfolioSnapshot {
                 budget_id: s.budget_id,
                 total_current_value: s.total_current_value,
                 total_open_cost_basis: s.total_open_cost_basis,
@@ -1374,7 +1370,6 @@ impl PortfolioBiz {
                 total_unrealized_pnl: s.total_unrealized_pnl,
                 total_return_pct: s.total_return_pct,
                 currency: s.currency,
-                assets: s.assets,
             })
     }
 }

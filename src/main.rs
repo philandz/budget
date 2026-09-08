@@ -85,11 +85,9 @@ async fn main() -> anyhow::Result<()> {
         biz.clone(),
         fx_svc.clone(),
     ));
-    let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
     let grpc_handler = BudgetHandler::new(biz.clone(), portfolio_biz.clone());
 
     // Reuse the same pool for the scheduled refresh job.
-    let portfolio_refresh_repo = portfolio_repo.clone();
 
     // Wire Portfolio service in front of the same Budget repository pool.
     // The identity client and BudgetBiz are shared so role resolution uses
@@ -118,7 +116,6 @@ async fn main() -> anyhow::Result<()> {
     let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
 
     // Reuse the same pool for the scheduled refresh job.
-    let portfolio_refresh_repo = portfolio_repo.clone();
 
     // gRPC server
     let grpc_addr: SocketAddr = format!("{}:{}", config.grpc_host, config.grpc_port).parse()?;
@@ -140,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
     // Scheduled price refresh job. Reads its interval from
     // PORTFOLIO_REFRESH_INTERVAL_SECS. Provider flags (e.g.
     // PORTFOLIO_ENABLE_SJC) are evaluated once at startup.
-    let refresh = RefreshJob::new(portfolio_refresh_repo.clone());
+    let refresh = RefreshJob::new(portfolio_repo.clone());
     tracing::info!(
         "Portfolio refresh job scheduled (interval = {}s)",
         refresh.interval_secs
