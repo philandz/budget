@@ -106,3 +106,63 @@ impl IdentityClient {
             .collect())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Entry service client (fund transfers: the standard-budget leg lives in `entries`)
+// ---------------------------------------------------------------------------
+
+use crate::pb::service::entry::entry_service_client::EntryServiceClient;
+use crate::pb::service::entry::{CreateTransferLegRequest, Entry, VoidTransferLegRequest};
+
+pub struct EntryClient {
+    inner: EntryServiceClient<Channel>,
+}
+
+impl EntryClient {
+    /// Lazy so the budget and entry services (which call each other) can start in any order.
+    pub fn connect_lazy(url: &str) -> anyhow::Result<Self> {
+        let channel = Channel::from_shared(url.to_string())
+            .map_err(|e| anyhow::anyhow!("invalid entry gRPC URL: {e}"))?
+            .connect_lazy();
+        Ok(Self {
+            inner: EntryServiceClient::new(channel),
+        })
+    }
+
+    fn with_caller<T>(
+        msg: T,
+        user_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<tonic::Request<T>, Status> {
+        let mut req = tonic::Request::new(msg);
+        let uid = tonic::metadata::MetadataValue::try_from(user_id)
+            .map_err(|_| Status::invalid_argument("invalid user id"))?;
+        req.metadata_mut().insert("x-user-id", uid);
+        if let Some(ut) = user_type {
+            if let Ok(v) = tonic::metadata::MetadataValue::try_from(ut) {
+                req.metadata_mut().insert("x-user-type", v);
+            }
+        }
+        Ok(req)
+    }
+
+    pub async fn create_transfer_leg(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: CreateTransferLegRequest,
+    ) -> Result<Entry, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.create_transfer_leg(req).await?.into_inner())
+    }
+
+    pub async fn void_transfer_leg(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: VoidTransferLegRequest,
+    ) -> Result<Entry, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.void_transfer_leg(req).await?.into_inner())
+    }
+}

@@ -1,0 +1,442 @@
+syntax = "proto3";
+
+package service.entry;
+
+option go_package = "github.com/philandz/philand/protobuf/entry";
+
+import "libs/protobuf/common/base.proto";
+import "libs/protobuf/google/api/annotations.proto";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum EntryKind {
+  ENTRY_KIND_UNSPECIFIED = 0;
+  ENTRY_KIND_EXPENSE     = 1;
+  ENTRY_KIND_INCOME      = 2;
+  // Money moved between two budgets of the same org. Always created as a
+  // pair (OUT on the source budget, IN on the destination) that share a
+  // transfer_group_id. Never counted as income or expense. Cannot be created
+  // through CreateEntry/UpdateEntry/BulkImport — use the transfer RPCs.
+  ENTRY_KIND_TRANSFER_OUT = 3;
+  ENTRY_KIND_TRANSFER_IN  = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Core messages
+// ---------------------------------------------------------------------------
+
+message Entry {
+  common.base.Base base         = 1;
+  string           budget_id    = 2;
+  string           category_id  = 3;
+  EntryKind        kind         = 4;
+  int64            amount       = 5;
+  string           description  = 6;
+  string           entry_date   = 7;   // YYYY-MM-DD
+  repeated string  tags        = 8;
+  string           notes       = 9;
+  bool             is_recurring = 10;
+  bool             has_attachment = 11;
+  // Recurring
+  optional string  recurrence_rule = 15;  // RRULE string e.g. "FREQ=MONTHLY;INTERVAL=1"
+  optional string  next_occurrence = 16; // YYYY-MM-DD of next scheduled entry
+  // Split
+  optional string  split_group_id  = 17;  // UUID linking split legs together
+  optional int64   split_total     = 18;  // total amount of the split group
+  // Transfer (only set when kind is TRANSFER_OUT / TRANSFER_IN)
+  optional string  transfer_group_id      = 19; // UUID shared by both legs
+  optional string  counterparty_budget_id = 20; // budget on the other side
+  optional string  counterparty_kind      = 21; // "entry" | "fund_cash"
+}
+
+message Comment {
+  string id         = 1;
+  string entry_id   = 2;
+  string body       = 3;
+  string created_by = 4;
+  int64  created_at = 5;
+  int64  updated_at = 6;
+  optional common.base.Base base = 7;
+}
+
+message Attachment {
+  string id         = 1;
+  string entry_id   = 2;
+  string file_id    = 3;
+  string file_name  = 4;
+  string created_by = 5;
+  int64  created_at = 6;
+  optional common.base.Base base = 7;
+}
+
+// ---------------------------------------------------------------------------
+// Pagination
+// ---------------------------------------------------------------------------
+
+message ListParams {
+  optional string q           = 1;
+  optional string kind        = 2;
+  optional string category_id = 3;
+  optional string date_from   = 4;
+  optional string date_to     = 5;
+  optional int64  amount_min  = 6;
+  optional int64  amount_max  = 7;
+  optional string tags        = 8;
+  optional string sort_by     = 9;
+  optional string sort_dir    = 10;
+  optional int32  page        = 11;
+  optional int32  page_size   = 12;
+  repeated string category_ids = 13;
+  // User IDs of entry creators. Multiple IDs use OR semantics.
+  repeated string member_ids   = 14;
+}
+
+message PageMeta {
+  int32 page        = 1;
+  int32 page_size   = 2;
+  int32 total_pages = 3;
+  int64 total_rows  = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Entry CRUD
+// ---------------------------------------------------------------------------
+
+message CreateEntryRequest {
+  string    budget_id   = 1;
+  string    category_id = 2;
+  EntryKind kind        = 3;
+  int64     amount      = 4;
+  string    description = 5;
+  string    entry_date  = 6;
+  repeated string tags  = 7;
+  string    notes       = 8;
+  optional string recurrence_rule = 9;
+  optional string split_group_id  = 10;
+  optional int64  split_total     = 11;
+}
+
+message UpdateEntryRequest {
+  string    entry_id    = 1;
+  optional string    category_id = 2;
+  optional EntryKind kind        = 3;
+  optional int64     amount      = 4;
+  optional string    description = 5;
+  optional string    entry_date  = 6;
+  repeated string    tags        = 7;
+  optional string    notes       = 8;
+}
+
+message DeleteEntryRequest  { string entry_id = 1; }
+message DeleteEntryResponse { bool success = 1; }
+
+message GetEntryRequest     { string entry_id = 1; }
+message GetEntryResponse    { Entry entry = 1; }
+
+message ListEntriesRequest  {
+  optional string budget_id = 1;
+  ListParams params = 2;
+  repeated string budget_ids = 3;
+}
+message ListEntriesResponse {
+  repeated Entry entries = 1;
+  PageMeta meta = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Bulk import
+// ---------------------------------------------------------------------------
+
+message BulkImportRow {
+  string    entry_date  = 1;
+  int64     amount      = 2;
+  EntryKind kind        = 3;
+  string    description = 4;
+  string    category_id = 5;
+  repeated string tags  = 6;
+  string    notes       = 7;
+}
+
+message BulkImportEntriesRequest {
+  string budget_id = 1;
+  repeated BulkImportRow rows = 2;
+}
+
+message BulkImportRowResult {
+  int32  row_index = 1;
+  bool   success   = 2;
+  string error     = 3;
+  string entry_id  = 4;
+}
+
+message BulkImportEntriesResponse {
+  int32 imported_count = 1;
+  int32 error_count    = 2;
+  repeated BulkImportRowResult results = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+
+message AddCommentRequest    { string entry_id = 1; string body = 2; }
+message EditCommentRequest   { string comment_id = 1; string body = 2; }
+message DeleteCommentRequest { string comment_id = 1; }
+message DeleteCommentResponse { bool success = 1; }
+message ListCommentsRequest  { string entry_id = 1; }
+message ListCommentsResponse { repeated Comment comments = 1; }
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+message AttachFileRequest    { string entry_id = 1; string file_id = 2; string file_name = 3; }
+message RemoveAttachmentRequest { string attachment_id = 1; }
+message RemoveAttachmentResponse { bool success = 1; }
+message ListAttachmentsRequest { string entry_id = 1; }
+message ListAttachmentsResponse { repeated Attachment attachments = 1; }
+
+// ---------------------------------------------------------------------------
+// Recurring entries
+// ---------------------------------------------------------------------------
+
+message CreateRecurringEntryRequest {
+  string    budget_id      = 1;
+  string    category_id    = 2;
+  EntryKind kind           = 3;
+  int64     amount         = 4;
+  string    description    = 5;
+  string    entry_date     = 6;   // first occurrence date
+  repeated string tags     = 7;
+  string    notes          = 8;
+  string    recurrence_rule = 9;  // RRULE e.g. "FREQ=MONTHLY;INTERVAL=1"
+}
+
+message UpdateRecurrenceRuleRequest {
+  string entry_id        = 1;
+  string recurrence_rule = 2;  // empty string = cancel recurrence
+}
+
+message CancelRecurrenceRequest {
+  string entry_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Split entries
+// ---------------------------------------------------------------------------
+
+message SplitLeg {
+  string    entry_id    = 1;
+  string    budget_id   = 2;
+  string    category_id = 3;
+  int64     amount      = 4;
+  string    description = 5;
+}
+
+message CreateSplitEntryRequest {
+  string    budget_id   = 1;
+  EntryKind kind        = 2;
+  int64     total_amount = 3;
+  string    description = 4;
+  string    entry_date  = 5;
+  repeated string tags  = 6;
+  string    notes       = 7;
+  repeated SplitLeg legs = 8;  // must sum to total_amount
+}
+
+message CreateSplitEntryResponse {
+  string split_group_id = 1;
+  repeated Entry legs   = 2;
+}
+
+message ListSplitLegsRequest  { string entry_id = 1; }
+message ListSplitLegsResponse { repeated Entry legs = 1; string split_group_id = 2; }
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+
+message GetEntrySummaryRequest { string budget_id = 1; }
+
+message EntrySummary {
+  string budget_id     = 1;
+  int64  total_income  = 2;
+  int64  total_expense = 3;
+  int64  current_balance = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Period totals (internal — called by budget, category, insight services)
+// ---------------------------------------------------------------------------
+
+// Aggregates entries so other services never have to read the entries table.
+// Dates are local calendar dates (entries.entry_date); date_from is inclusive,
+// date_to is exclusive. There is deliberately no google.api.http annotation:
+// the gateway does not expose this RPC, and callers have already authorised
+// the user against each budget.
+message PeriodTotalsRequest {
+  repeated string budget_ids       = 1;  // 1..200 ids
+  string          date_from        = 2;  // YYYY-MM-DD inclusive
+  string          date_to          = 3;  // YYYY-MM-DD exclusive
+  bool            group_by_category = 4; // one row per (budget, category)
+  bool            group_by_day      = 5; // one row per (budget, [category,] day)
+}
+
+message PeriodTotalsRow {
+  string budget_id    = 1;
+  string category_id  = 2;  // "" when not grouped by category, or uncategorised
+  string day          = 3;  // YYYY-MM-DD, "" when not grouped by day
+  int64  income       = 4;
+  int64  expense      = 5;
+  int64  transfer_in  = 6;
+  int64  transfer_out = 7;
+  int64  count        = 8;
+}
+
+message PeriodTotalsResponse { repeated PeriodTotalsRow rows = 1; }
+
+// ---------------------------------------------------------------------------
+// Transfers (plan R1): money moved between two budgets, stored as a pair of entries
+// ---------------------------------------------------------------------------
+
+message CreateTransferRequest {
+  string source_budget_id      = 1;
+  string destination_budget_id = 2;
+  int64  amount                = 3;  // minor units, > 0
+  string entry_date            = 4;  // YYYY-MM-DD
+  string description           = 5;
+  optional string notes        = 6;
+  string idempotency_key       = 7;  // optional; same key returns the same transfer
+}
+
+message Transfer {
+  string group_id = 1;
+  Entry  out_entry = 2;
+  Entry  in_entry  = 3;
+}
+
+message UpdateTransferRequest {
+  string group_id = 1;
+  optional int64  amount      = 2;
+  optional string entry_date  = 3;
+  optional string description = 4;
+  optional string notes       = 5;
+}
+
+message DeleteTransferRequest  { string group_id = 1; }
+message DeleteTransferResponse { bool success = 1; }
+
+// Internal (budget-service saga): one leg only, idempotent on (budget_id, idempotency_key).
+message CreateTransferLegRequest {
+  string budget_id               = 1;
+  EntryKind kind                 = 2;  // TRANSFER_OUT or TRANSFER_IN
+  int64  amount                  = 3;
+  string entry_date              = 4;
+  string description             = 5;
+  string transfer_group_id       = 6;
+  string counterparty_budget_id  = 7;
+  string counterparty_kind       = 8;  // "fund_cash"
+  string idempotency_key         = 9;
+  string actor_user_id           = 10;
+}
+
+message VoidTransferLegRequest {
+  string budget_id       = 1;
+  string idempotency_key = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+service EntryService {
+  // Internal aggregation (no HTTP route)
+  rpc GetPeriodTotals(PeriodTotalsRequest) returns (PeriodTotalsResponse);
+  // Internal transfer legs for the budget-service saga (no HTTP route)
+  rpc CreateTransferLeg(CreateTransferLegRequest) returns (Entry);
+  rpc VoidTransferLeg(VoidTransferLegRequest) returns (Entry);
+
+  // Transfers between budgets
+  rpc CreateTransfer(CreateTransferRequest) returns (Transfer) {
+    option (google.api.http) = { post: "/transfers" body: "*" };
+  }
+  rpc UpdateTransfer(UpdateTransferRequest) returns (Transfer) {
+    option (google.api.http) = { patch: "/transfers/{group_id}" body: "*" };
+  }
+  rpc DeleteTransfer(DeleteTransferRequest) returns (DeleteTransferResponse) {
+    option (google.api.http) = { delete: "/transfers/{group_id}" };
+  }
+
+  // Entry CRUD
+  rpc CreateEntry(CreateEntryRequest) returns (Entry) {
+    option (google.api.http) = { post: "/entries" body: "*" };
+  }
+  rpc UpdateEntry(UpdateEntryRequest) returns (Entry) {
+    option (google.api.http) = { patch: "/entries/{entry_id}" body: "*" };
+  }
+  rpc DeleteEntry(DeleteEntryRequest) returns (DeleteEntryResponse) {
+    option (google.api.http) = { delete: "/entries/{entry_id}" };
+  }
+  rpc GetEntry(GetEntryRequest) returns (GetEntryResponse) {
+    option (google.api.http) = { get: "/entries/{entry_id}" };
+  }
+  rpc ListEntries(ListEntriesRequest) returns (ListEntriesResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/entries" };
+  }
+
+  // Bulk import
+  rpc BulkImportEntries(BulkImportEntriesRequest) returns (BulkImportEntriesResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/entries/bulk-import" body: "*" };
+  }
+
+  // Comments
+  rpc AddComment(AddCommentRequest) returns (Comment) {
+    option (google.api.http) = { post: "/entries/{entry_id}/comments" body: "*" };
+  }
+  rpc EditComment(EditCommentRequest) returns (Comment) {
+    option (google.api.http) = { patch: "/comments/{comment_id}" body: "*" };
+  }
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse) {
+    option (google.api.http) = { delete: "/comments/{comment_id}" };
+  }
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse) {
+    option (google.api.http) = { get: "/entries/{entry_id}/comments" };
+  }
+
+  // Attachments
+  rpc AttachFile(AttachFileRequest) returns (Attachment) {
+    option (google.api.http) = { post: "/entries/{entry_id}/attachments" body: "*" };
+  }
+  rpc RemoveAttachment(RemoveAttachmentRequest) returns (RemoveAttachmentResponse) {
+    option (google.api.http) = { delete: "/attachments/{attachment_id}" };
+  }
+  rpc ListAttachments(ListAttachmentsRequest) returns (ListAttachmentsResponse) {
+    option (google.api.http) = { get: "/entries/{entry_id}/attachments" };
+  }
+
+  // Recurring
+  rpc CreateRecurringEntry(CreateRecurringEntryRequest) returns (Entry) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/entries/recurring" body: "*" };
+  }
+  rpc UpdateRecurrenceRule(UpdateRecurrenceRuleRequest) returns (Entry) {
+    option (google.api.http) = { patch: "/entries/{entry_id}/recurrence" body: "*" };
+  }
+  rpc CancelRecurrence(CancelRecurrenceRequest) returns (Entry) {
+    option (google.api.http) = { delete: "/entries/{entry_id}/recurrence" };
+  }
+
+  // Split
+  rpc CreateSplitEntry(CreateSplitEntryRequest) returns (CreateSplitEntryResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/entries/split" body: "*" };
+  }
+  rpc ListSplitLegs(ListSplitLegsRequest) returns (ListSplitLegsResponse) {
+    option (google.api.http) = { get: "/entries/{entry_id}/split-legs" };
+  }
+
+  // Summary
+  rpc GetEntrySummary(GetEntrySummaryRequest) returns (EntrySummary) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/summary" };
+  }
+}
