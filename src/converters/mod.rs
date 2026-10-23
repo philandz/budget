@@ -155,6 +155,7 @@ pub fn map_budget(db: DbBudget) -> Budget {
         timezone: db
             .timezone
             .unwrap_or_else(|| crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
+        status: db.status,
     }
 }
 

@@ -122,12 +122,47 @@ impl BudgetBiz {
         currency: &str,
         _template_id: Option<&str>,
     ) -> Result<Budget, Status> {
+        let currency = crate::manager::validate::sharing_currency(budget_type, currency)?;
         let db = self
             .repo
-            .create_budget(org_id, name, budget_type, currency, user_id)
+            .create_budget(org_id, name, budget_type, &currency, user_id)
             .await
             .map_err(Self::internal)?;
         Ok(map_budget(db))
+    }
+
+    /// Archive / reopen a sharing budget. Owner or Manager only.
+    pub async fn set_budget_status(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        status: &str,
+    ) -> Result<Budget, Status> {
+        let status = crate::manager::validate::settable_status(status)?;
+        let (role, is_member) = self.check_role(user_id, budget_id, None).await?;
+        if !is_member || !matches!(role, BudgetRole::Owner | BudgetRole::Manager) {
+            return Err(Status::permission_denied(
+                "Only an owner or manager can archive or reopen a budget",
+            ));
+        }
+        let db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        if crate::converters::budget_type_from_db(&db.budget_type) != BudgetType::Sharing {
+            return Err(Status::failed_precondition(
+                "Only sharing budgets can be archived",
+            ));
+        }
+        if db.status != "active" && db.status != "archived" {
+            return Err(Status::failed_precondition("Budget is not open"));
+        }
+        self.repo
+            .set_budget_status(budget_id, status)
+            .await
+            .map_err(Self::internal)?;
+        self.get_budget_admin(budget_id).await
     }
 
     /// Applies validated period settings to a budget and returns the refreshed budget.

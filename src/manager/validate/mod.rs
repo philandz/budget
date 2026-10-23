@@ -106,3 +106,28 @@ pub fn period_settings(
     };
     Ok((day, tz))
 }
+
+/// Sharing budgets are VND-only until FX exists. Empty means "default to VND".
+pub fn sharing_currency(budget_type: BudgetType, currency: &str) -> Result<String, Status> {
+    if budget_type != BudgetType::Sharing {
+        return Ok(currency.to_string());
+    }
+    let c = currency.trim();
+    if c.is_empty() || c.eq_ignore_ascii_case("VND") {
+        Ok("VND".to_string())
+    } else {
+        Err(Status::invalid_argument(
+            "Sharing budgets only support VND currency",
+        ))
+    }
+}
+
+/// Status values a caller may set via SetBudgetStatus.
+pub fn settable_status(status: &str) -> Result<&str, Status> {
+    match status {
+        "active" | "archived" => Ok(status),
+        _ => Err(Status::invalid_argument(
+            "status must be 'active' or 'archived'",
+        )),
+    }
+}

@@ -61,6 +61,7 @@ message Budget {
   // Budget period (standard budgets): a period starts on this day of the month, in `timezone`.
   int32  period_start_day = 15;  // 1..28, default 1
   string timezone         = 16;  // IANA name, default Asia/Ho_Chi_Minh
+  string status           = 17;  // active | archived | closed
 }
 
 message BudgetMember {
@@ -222,6 +223,14 @@ message ListBudgetMembersAdminResponse { repeated BudgetMember members = 1; }
 
 message ForceCloseBudgetRequest { string budget_id = 1; }
 message ForceCloseBudgetResponse { Budget budget = 1; }
+
+// Archive / reopen a sharing budget (Owner/Manager). status: "active" | "archived".
+message SetBudgetStatusRequest  { string budget_id = 1; string status = 2; }
+message SetBudgetStatusResponse { Budget budget = 1; }
+
+// Internal: lets other services guard writes on archived budgets (guests included).
+message GetBudgetStatusRequest  { string budget_id = 1; }
+message GetBudgetStatusResponse { string status = 1; BudgetType budget_type = 2; }
 
 // ---------------------------------------------------------------------------
 // Envelope limits & burn-rate
@@ -439,6 +448,11 @@ service BudgetService {
 
   // Force-close: sets budget status to 'closed' immediately (admin only)
   rpc ForceCloseBudget(ForceCloseBudgetRequest) returns (ForceCloseBudgetResponse) {}
+
+  // Archive/reopen a sharing budget (Owner/Manager only)
+  rpc SetBudgetStatus(SetBudgetStatusRequest) returns (SetBudgetStatusResponse) {}
+  // Internal status lookup (no membership check)
+  rpc GetBudgetStatus(GetBudgetStatusRequest) returns (GetBudgetStatusResponse) {}
 
   // Role authority (internal — no public HTTP binding)
   rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}

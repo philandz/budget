@@ -350,6 +350,20 @@ impl BudgetRepository {
         Ok(())
     }
 
+    /// Sets 'active' <-> 'archived' on a live (non-deleted, non-closed) budget.
+    pub async fn set_budget_status(&self, budget_id: &str, status: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE budgets SET status = ?, updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL AND status IN ('active','archived')",
+        )
+        .bind(status)
+        .bind(now_unix())
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn force_close_budget(&self, budget_id: &str) -> Result<()> {
         let now = now_unix();
         sqlx::query("UPDATE budgets SET status = 'closed', updated_at = ? WHERE id = ? AND deleted_at IS NULL")

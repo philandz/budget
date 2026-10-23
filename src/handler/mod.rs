@@ -10,15 +10,16 @@ use crate::pb::service::budget::{
     CreateBudgetRequest, CreateBudgetResponse, CreateInvestAssetRequest, DeleteBudgetRequest,
     DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse,
     ForceCloseBudgetRequest, ForceCloseBudgetResponse, GetBudgetAdminRequest,
-    GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse, GetBurnRateRequest,
-    GetBurnRateResponse, GetInvestPortfolioSummaryRequest, GetLatestPriceSnapshotRequest,
-    GetRolloverPolicyRequest, GetRolloverPolicyResponse, InvestAsset, InvestPortfolioSummary,
-    ListBudgetMembersAdminRequest, ListBudgetMembersAdminResponse, ListBudgetMembersRequest,
-    ListBudgetMembersResponse, ListBudgetsAdminRequest, ListBudgetsAdminResponse,
-    ListBudgetsRequest, ListBudgetsResponse, ListInvestAssetsRequest, ListInvestAssetsResponse,
-    ListPriceSnapshotsRequest, ListPriceSnapshotsResponse, ListTemplatesRequest,
-    ListTemplatesResponse, PortfolioSnapshot, PriceSnapshot, RefreshPortfolioRequest,
-    RefreshPortfolioResponse, RemoveBudgetMemberRequest, RemoveBudgetMemberResponse,
+    GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse, GetBudgetStatusRequest,
+    GetBudgetStatusResponse, GetBurnRateRequest, GetBurnRateResponse,
+    GetInvestPortfolioSummaryRequest, GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest,
+    GetRolloverPolicyResponse, InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
+    ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse,
+    ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest, ListBudgetsResponse,
+    ListInvestAssetsRequest, ListInvestAssetsResponse, ListPriceSnapshotsRequest,
+    ListPriceSnapshotsResponse, ListTemplatesRequest, ListTemplatesResponse, PortfolioSnapshot,
+    PriceSnapshot, RefreshPortfolioRequest, RefreshPortfolioResponse, RemoveBudgetMemberRequest,
+    RemoveBudgetMemberResponse, SetBudgetStatusRequest, SetBudgetStatusResponse,
     SetEnvelopeLimitRequest, SetEnvelopeLimitResponse, SetRolloverPolicyRequest,
     SetRolloverPolicyResponse, UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse,
     UpdateBudgetRequest, UpdateBudgetResponse, UpdateInvestAssetRequest,
@@ -75,7 +76,11 @@ impl BudgetService for BudgetHandler {
             )
             .await;
         if req.period_start_day.is_some() || req.timezone.is_some() {
-            let id = budget.base.as_ref().map(|b| b.id.clone()).unwrap_or_default();
+            let id = budget
+                .base
+                .as_ref()
+                .map(|b| b.id.clone())
+                .unwrap_or_default();
             self.biz
                 .apply_period(&user_id, &id, req.period_start_day, req.timezone.as_deref())
                 .await?;
@@ -197,6 +202,33 @@ impl BudgetService for BudgetHandler {
         let budget = self.biz.force_close_budget(&req.budget_id).await?;
         Ok(Response::new(ForceCloseBudgetResponse {
             budget: Some(budget),
+        }))
+    }
+
+    async fn set_budget_status(
+        &self,
+        request: Request<SetBudgetStatusRequest>,
+    ) -> Result<Response<SetBudgetStatusResponse>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let req = request.into_inner();
+        let budget = self
+            .biz
+            .set_budget_status(&user_id, &req.budget_id, &req.status)
+            .await?;
+        Ok(Response::new(SetBudgetStatusResponse {
+            budget: Some(budget),
+        }))
+    }
+
+    async fn get_budget_status(
+        &self,
+        request: Request<GetBudgetStatusRequest>,
+    ) -> Result<Response<GetBudgetStatusResponse>, Status> {
+        let req = request.into_inner();
+        let b = self.biz.get_budget_admin(&req.budget_id).await?;
+        Ok(Response::new(GetBudgetStatusResponse {
+            status: b.status,
+            budget_type: b.budget_type,
         }))
     }
 
