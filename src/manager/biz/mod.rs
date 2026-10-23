@@ -14,6 +14,19 @@ use crate::pb::service::budget::{
 use crate::pb::shared::organization::OrgRole;
 
 pub mod envelope;
+
+/// `[first day of this month, first day of next month)` as YYYY-MM-DD strings (UTC).
+fn month_window(now: chrono::DateTime<chrono::Utc>) -> (String, String) {
+    use chrono::Datelike;
+    let first = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1).expect("valid month start");
+    let next = if now.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+    } else {
+        chrono::NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+    }
+    .expect("valid next month");
+    (first.format("%Y-%m-%d").to_string(), next.format("%Y-%m-%d").to_string())
+}
 pub mod portfolio;
 pub mod seed;
 
@@ -22,6 +35,7 @@ pub struct BudgetBiz {
     pub config: BudgetServiceConfig,
     pub identity_client: Arc<Mutex<IdentityClient>>,
     pub category_client: Option<Arc<Mutex<CategoryClient>>>,
+    entry_client: Option<Arc<Mutex<crate::manager::client::EntryClient>>>,
 }
 
 impl BudgetBiz {
@@ -35,6 +49,35 @@ impl BudgetBiz {
             config,
             identity_client: Arc::new(Mutex::new(identity_client)),
             category_client: None,
+            entry_client: None,
+        }
+    }
+
+    /// Lets budget reads fill `current_spend` from the Entry service (no direct reads of `entries`).
+    pub fn with_entry_client(mut self, client: crate::manager::client::EntryClient) -> Self {
+        self.entry_client = Some(Arc::new(Mutex::new(client)));
+        self
+    }
+
+    /// Fills `current_spend` (expenses in the current calendar month) for the given rows.
+    /// Best effort: if Entry is unreachable the spend stays 0 and the read still succeeds.
+    async fn fill_spend(&self, caller: &str, rows: &mut [crate::converters::DbBudget]) {
+        let Some(client) = &self.entry_client else {
+            return;
+        };
+        if rows.is_empty() {
+            return;
+        }
+        let now = chrono::Utc::now();
+        let (from, to) = month_window(now);
+        let ids = rows.iter().map(|r| r.id.clone()).collect();
+        match client.lock().await.expense_by_budget(caller, ids, &from, &to).await {
+            Ok(map) => {
+                for r in rows.iter_mut() {
+                    r.current_spend = Some(map.get(&r.id).copied().unwrap_or(0));
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "entry spend lookup failed; current_spend left at 0"),
         }
     }
 
@@ -91,6 +134,7 @@ impl BudgetBiz {
             config: philand_configs::BudgetServiceConfig::default_for_tests(),
             identity_client: Arc::new(Mutex::new(IdentityClient::test_only_unreachable())),
             category_client: None,
+            entry_client: None,
         }
     }
 
@@ -201,20 +245,22 @@ impl BudgetBiz {
             BudgetRole::Viewer => "viewer",
             BudgetRole::Unspecified => "",
         };
-        let db = self
+        let mut db = self
             .repo
             .get_budget_for_user(budget_id, user_id, Some(role_label))
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
+        self.fill_spend(user_id, std::slice::from_mut(&mut db)).await;
         Ok(map_budget(db))
     }
 
     pub async fn get_budget_admin(&self, budget_id: &str) -> Result<Budget, Status> {
-        let db = self
+        let mut db = self
             .repo
             .get_budget_by_id(budget_id)
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
+        self.fill_spend("system", std::slice::from_mut(&mut db)).await;
         Ok(map_budget(db))
     }
 
@@ -325,11 +371,12 @@ impl BudgetBiz {
     }
 
     pub async fn list_budgets(&self, user_id: &str, org_id: &str) -> Result<Vec<Budget>, Status> {
-        let rows = self
+        let mut rows = self
             .repo
             .list_budgets_for_user(org_id, user_id)
             .await
             .map_err(Self::internal)?;
+        self.fill_spend(user_id, &mut rows).await;
         Ok(rows.into_iter().map(map_budget).collect())
     }
 
@@ -358,7 +405,7 @@ impl BudgetBiz {
                 .filter(|&br| br != BudgetRole::Unspecified)
         });
 
-        let (rows, total) = self
+        let (mut rows, total) = self
             .repo
             .list_budgets_paged(
                 org_id,
@@ -373,6 +420,8 @@ impl BudgetBiz {
             )
             .await
             .map_err(Self::internal)?;
+
+        self.fill_spend(user_id, &mut rows).await;
 
         let total_pages = if total == 0 {
             0
@@ -403,11 +452,12 @@ impl BudgetBiz {
         // We trust the x-user-id header from gateway.
         let _ = caller_id; // unused, gateway already verified
 
-        let (rows, total) = self
+        let (mut rows, total) = self
             .repo
             .list_budgets_admin(org_id, budget_type, name_search, page, page_size)
             .await
             .map_err(Self::internal)?;
+        self.fill_spend(caller_id, &mut rows).await;
         Ok((rows.into_iter().map(map_budget).collect(), total))
     }
 
@@ -659,8 +709,8 @@ impl BudgetBiz {
         budget_id: &str,
         monthly_limit: i64,
     ) -> Result<EnvelopeLimit, Status> {
-        // Follow the budget's own period (start day + timezone). `entries` is read through the
-        // shared DB; if that fails, degrade to 0 spend rather than failing the request.
+        // Follow the budget's own period (start day + timezone). Spend comes from the Entry service;
+        // if that fails, degrade to 0 spend rather than failing the request.
         let now = chrono::Utc::now();
         let (start_day, tz) = match self.repo.get_budget_by_id(budget_id).await {
             Ok(b) => (
@@ -671,16 +721,24 @@ impl BudgetBiz {
             Err(_) => (1, crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
         };
         let period = envelope::current_period(now, start_day, &tz);
-        let current_spend = self
-            .repo
-            .get_period_spend(
-                budget_id,
-                &philand_time::period::ymd(period.0),
-                &philand_time::period::ymd(period.1),
-            )
-            .await
-            .map_err(Self::internal)
-            .unwrap_or(0);
+        let current_spend = match &self.entry_client {
+            Some(client) => client
+                .lock()
+                .await
+                .expense_by_budget(
+                    "system",
+                    vec![budget_id.to_string()],
+                    &philand_time::period::ymd(period.0),
+                    &philand_time::period::ymd(period.1),
+                )
+                .await
+                .map(|m| m.get(budget_id).copied().unwrap_or(0))
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "entry spend lookup failed; using 0");
+                    0
+                }),
+            None => 0,
+        };
 
         let burn_rate_pct = envelope::burn_rate_pct(
             current_spend,
@@ -1097,3 +1155,21 @@ impl BudgetBiz {
     }
 }
 
+
+#[cfg(test)]
+mod month_window_tests {
+    use super::month_window;
+    use chrono::TimeZone;
+
+    #[test]
+    fn mid_month() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 10, 23, 8, 0, 0).unwrap();
+        assert_eq!(month_window(now), ("2026-10-01".into(), "2026-11-01".into()));
+    }
+
+    #[test]
+    fn december_rolls_into_next_year() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 12, 31, 23, 0, 0).unwrap();
+        assert_eq!(month_window(now), ("2026-12-01".into(), "2027-01-01".into()));
+    }
+}

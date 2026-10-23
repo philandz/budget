@@ -63,7 +63,8 @@ async fn main() -> anyhow::Result<()> {
         BudgetBiz::new(repo, config.clone(), identity_client)
             .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
                 &category_url,
-            )?),
+            )?)
+            .with_entry_client(entry_client()?),
     );
 
     // Wire Portfolio service in front of the same Budget repository pool.

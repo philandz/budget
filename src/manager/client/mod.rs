@@ -146,6 +146,36 @@ impl EntryClient {
         Ok(req)
     }
 
+    /// Expense totals per budget in `[date_from, date_to)`. Transfers are excluded by the entry service.
+    pub async fn expense_by_budget(
+        &mut self,
+        user_id: &str,
+        budget_ids: Vec<String>,
+        date_from: &str,
+        date_to: &str,
+    ) -> Result<std::collections::HashMap<String, i64>, Status> {
+        use crate::pb::service::entry::PeriodTotalsRequest;
+        let mut out = std::collections::HashMap::new();
+        // Entry caps a request at 200 budgets.
+        for chunk in budget_ids.chunks(200) {
+            let req = Self::with_caller(
+                PeriodTotalsRequest {
+                    budget_ids: chunk.to_vec(),
+                    date_from: date_from.to_string(),
+                    date_to: date_to.to_string(),
+                    group_by_category: false,
+                    group_by_day: false,
+                },
+                user_id,
+                None,
+            )?;
+            for row in self.inner.get_period_totals(req).await?.into_inner().rows {
+                *out.entry(row.budget_id).or_insert(0) += row.expense;
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn create_transfer_leg(
         &mut self,
         user_id: &str,
@@ -172,7 +202,9 @@ impl EntryClient {
 // ---------------------------------------------------------------------------
 
 use crate::pb::service::category::category_service_client::CategoryServiceClient;
-use crate::pb::service::category::{SeedCategoriesRequest, SeedCategoriesResponse, SeedCategoryItem};
+use crate::pb::service::category::{
+    SeedCategoriesRequest, SeedCategoriesResponse, SeedCategoryItem,
+};
 
 pub struct CategoryClient {
     inner: CategoryServiceClient<Channel>,
