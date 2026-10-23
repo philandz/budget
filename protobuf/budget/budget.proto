@@ -99,6 +99,8 @@ message CreateBudgetRequest {
   string template_id = 5;  // optional — apply a preset category structure
   optional int32  period_start_day = 6;  // 1..28; default 1
   optional string timezone         = 7;  // IANA name; default Asia/Ho_Chi_Minh
+  string locale          = 8;  // "vi" | "en": language of the seeded category names (default vi)
+  int64  expected_income = 9;  // optional: turns template percentages into planned amounts
 }
 message CreateBudgetResponse { Budget budget = 1; }
 

@@ -166,3 +166,43 @@ impl EntryClient {
         Ok(self.inner.void_transfer_leg(req).await?.into_inner())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Category service client (seeding default categories for new budgets)
+// ---------------------------------------------------------------------------
+
+use crate::pb::service::category::category_service_client::CategoryServiceClient;
+use crate::pb::service::category::{SeedCategoriesRequest, SeedCategoriesResponse, SeedCategoryItem};
+
+pub struct CategoryClient {
+    inner: CategoryServiceClient<Channel>,
+}
+
+impl CategoryClient {
+    /// Lazy: category calls budget for roles and budget calls category to seed, so neither
+    /// may require the other to be up at start-up.
+    pub fn connect_lazy(url: &str) -> anyhow::Result<Self> {
+        let channel = Channel::from_shared(url.to_string())
+            .map_err(|e| anyhow::anyhow!("invalid category gRPC URL: {e}"))?
+            .connect_lazy();
+        Ok(Self {
+            inner: CategoryServiceClient::new(channel),
+        })
+    }
+
+    pub async fn seed_categories(
+        &mut self,
+        user_id: &str,
+        budget_id: &str,
+        items: Vec<SeedCategoryItem>,
+    ) -> Result<SeedCategoriesResponse, Status> {
+        let mut req = tonic::Request::new(SeedCategoriesRequest {
+            budget_id: budget_id.to_string(),
+            items,
+        });
+        let uid = tonic::metadata::MetadataValue::try_from(user_id)
+            .map_err(|_| Status::invalid_argument("invalid user id"))?;
+        req.metadata_mut().insert("x-user-id", uid);
+        Ok(self.inner.seed_categories(req).await?.into_inner())
+    }
+}

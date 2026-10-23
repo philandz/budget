@@ -61,6 +61,19 @@ impl BudgetService for BudgetHandler {
                 },
             )
             .await?;
+        self.biz
+            .seed_new_budget(
+                &user_id,
+                &budget,
+                if req.template_id.is_empty() {
+                    None
+                } else {
+                    Some(&req.template_id)
+                },
+                &req.locale,
+                req.expected_income,
+            )
+            .await;
         if req.period_start_day.is_some() || req.timezone.is_some() {
             let id = budget.base.as_ref().map(|b| b.id.clone()).unwrap_or_default();
             self.biz

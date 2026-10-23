@@ -15,6 +15,9 @@ pub mod pb {
         pub mod entry {
             tonic::include_proto!("service.entry");
         }
+        pub mod category {
+            tonic::include_proto!("service.category");
+        }
     }
     pub mod common {
         pub mod base {

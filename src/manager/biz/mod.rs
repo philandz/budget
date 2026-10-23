@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use tonic::Status;
 
 use crate::converters::{map_budget, map_budget_member, map_budget_member_with, DbTemplate};
-use crate::manager::client::{self, IdentityClient};
+use crate::manager::client::{self, CategoryClient, IdentityClient};
 use crate::manager::repository::BudgetRepository;
 use crate::pb::service::budget::{
     Budget, BudgetMember, BudgetRole, BudgetTemplate, BudgetType, EnvelopeLimit, ListBudgetParams,
@@ -14,11 +14,13 @@ use crate::pb::service::budget::{
 use crate::pb::shared::organization::OrgRole;
 
 pub mod portfolio;
+pub mod seed;
 
 pub struct BudgetBiz {
     pub repo: Arc<BudgetRepository>,
     pub config: BudgetServiceConfig,
     pub identity_client: Arc<Mutex<IdentityClient>>,
+    pub category_client: Option<Arc<Mutex<CategoryClient>>>,
 }
 
 impl BudgetBiz {
@@ -31,6 +33,47 @@ impl BudgetBiz {
             repo: Arc::new(repo),
             config,
             identity_client: Arc::new(Mutex::new(identity_client)),
+            category_client: None,
+        }
+    }
+
+    /// Enables seeding default categories on budget creation.
+    pub fn with_category_client(mut self, client: CategoryClient) -> Self {
+        self.category_client = Some(Arc::new(Mutex::new(client)));
+        self
+    }
+
+    /// Seeds template/default categories for a freshly created budget. Best effort: a failure
+    /// is logged and the budget is kept, so the user can retry from an empty state in the UI.
+    pub async fn seed_new_budget(
+        &self,
+        user_id: &str,
+        budget: &Budget,
+        template_id: Option<&str>,
+        locale: &str,
+        expected_income: i64,
+    ) {
+        let Some(client) = &self.category_client else {
+            return;
+        };
+        let budget_id = budget.base.as_ref().map(|b| b.id.clone()).unwrap_or_default();
+        let budget_type = BudgetType::try_from(budget.budget_type).unwrap_or(BudgetType::Standard);
+        let items = seed::seed_items(
+            template_id,
+            budget_type,
+            seed::Locale::parse(locale),
+            expected_income,
+        );
+        if items.is_empty() {
+            return;
+        }
+        if let Err(e) = client
+            .lock()
+            .await
+            .seed_categories(user_id, &budget_id, items)
+            .await
+        {
+            tracing::warn!(%budget_id, error = %e, "seeding default categories failed");
         }
     }
 
@@ -46,6 +89,7 @@ impl BudgetBiz {
             repo,
             config: philand_configs::BudgetServiceConfig::default_for_tests(),
             identity_client: Arc::new(Mutex::new(IdentityClient::test_only_unreachable())),
+            category_client: None,
         }
     }
 

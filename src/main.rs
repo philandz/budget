@@ -57,7 +57,14 @@ async fn main() -> anyhow::Result<()> {
     let identity_client = IdentityClient::from_channel(identity_channel);
     tracing::info!("Identity gRPC client connected to {}", identity_url);
 
-    let biz = Arc::new(BudgetBiz::new(repo, config.clone(), identity_client));
+    let category_url = std::env::var("CATEGORY_GRPC_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:50104".to_string());
+    let biz = Arc::new(
+        BudgetBiz::new(repo, config.clone(), identity_client)
+            .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
+                &category_url,
+            )?),
+    );
 
     // Wire Portfolio service in front of the same Budget repository pool.
 
