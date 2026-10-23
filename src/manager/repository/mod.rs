@@ -134,7 +134,7 @@ impl BudgetRepository {
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
                     COALESCE(cs.current_spend, 0) AS current_spend,
-                    b.is_private,
+                    b.is_private, b.period_start_day, b.timezone,
                     0 AS asset_count,
                     0 AS total_current_value,
                     0 AS total_cost_basis
@@ -180,7 +180,7 @@ impl BudgetRepository {
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
                     COALESCE(cs.current_spend, 0) AS current_spend,
-                    b.is_private
+                    b.is_private, b.period_start_day, b.timezone
                FROM budgets b
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
@@ -224,6 +224,27 @@ impl BudgetRepository {
         .execute(&self.pool)
         .await?;
         self.get_budget_for_user(budget_id, updated_by, None).await
+    }
+
+    /// Updates only the provided period settings; `None` keeps the stored value.
+    pub async fn set_budget_period(
+        &self,
+        budget_id: &str,
+        start_day: Option<u8>,
+        timezone: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE budgets SET period_start_day = COALESCE(?, period_start_day),
+                    timezone = COALESCE(?, timezone), updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(start_day.map(|d| d as i32))
+        .bind(timezone)
+        .bind(now_unix())
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn delete_budget(&self, budget_id: &str) -> Result<()> {
@@ -355,7 +376,7 @@ impl BudgetRepository {
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend,
-                  b.is_private
+                  b.is_private, b.period_start_day, b.timezone
                FROM budgets b
                INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -481,7 +502,7 @@ impl BudgetRepository {
                       el.monthly_limit AS envelope_limit,
                       COALESCE(mc.member_count, 0) AS member_count,
                       COALESCE(cs.current_spend, 0) AS current_spend,
-                      b.is_private
+                      b.is_private, b.period_start_day, b.timezone
                    FROM budgets b
                    INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ? AND bm.role = ?
                    LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -519,7 +540,7 @@ impl BudgetRepository {
                       el.monthly_limit AS envelope_limit,
                       COALESCE(mc.member_count, 0) AS member_count,
                       COALESCE(cs.current_spend, 0) AS current_spend,
-                      b.is_private
+                      b.is_private, b.period_start_day, b.timezone
                    FROM budgets b
                    INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                    LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -624,7 +645,7 @@ impl BudgetRepository {
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
                   COALESCE(cs.current_spend, 0) AS current_spend,
-                  b.is_private,
+                  b.is_private, b.period_start_day, b.timezone,
                   COALESCE(ia.asset_count, 0) AS asset_count,
                   COALESCE(ip.total_current_value, 0) AS total_current_value,
                   COALESCE(ip.total_cost_basis, 0) AS total_cost_basis

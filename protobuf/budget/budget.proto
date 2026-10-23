@@ -52,6 +52,15 @@ message Budget {
   double burn_rate_pct   = 9;   // projected % of limit consumed (0-100+)
   int32  member_count    = 10;  // number of members in this budget
   bool   is_private       = 11; // sharing budget visibility flag
+
+  // Investment portfolio totals (populated for invest budgets via get_portfolio_summary)
+  int64  total_current_value = 12; // real portfolio total current value
+  int64  total_cost_basis    = 13; // real portfolio total cost basis
+  int32  asset_count         = 14; // real asset count for this budget
+
+  // Budget period (standard budgets): a period starts on this day of the month, in `timezone`.
+  int32  period_start_day = 15;  // 1..28, default 1
+  string timezone         = 16;  // IANA name, default Asia/Ho_Chi_Minh
 }
 
 message BudgetMember {
@@ -88,6 +97,8 @@ message CreateBudgetRequest {
   BudgetType budget_type = 3;
   string currency    = 4;
   string template_id = 5;  // optional — apply a preset category structure
+  optional int32  period_start_day = 6;  // 1..28; default 1
+  optional string timezone         = 7;  // IANA name; default Asia/Ho_Chi_Minh
 }
 message CreateBudgetResponse { Budget budget = 1; }
 
@@ -103,6 +114,8 @@ message UpdateBudgetRequest {
   string name        = 2;
   BudgetType budget_type = 3;
   bool is_private    = 4;
+  optional int32  period_start_day = 5;  // unset keeps the current value
+  optional string timezone         = 6;
 }
 message UpdateBudgetResponse { Budget budget = 1; }
 
@@ -165,6 +178,8 @@ message CheckRoleResponse {
   string     currency    = 4;
   BudgetType budget_type = 5;
   string     name        = 6;
+  int32      period_start_day = 7;  // 1..28
+  string     timezone         = 8;  // IANA name
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +265,29 @@ enum AssetType {
   ASSET_TYPE_STOCK           = 3;
 }
 
+// ---------------------------------------------------------------------------
+// Portfolio refresh
+// ---------------------------------------------------------------------------
+
+message RefreshPortfolioRequest {
+  string budget_id = 1;
+}
+
+message RefreshPortfolioResponse {
+  PortfolioSnapshot snapshot = 1;
+}
+
+// Embedded snapshot (mirrors service.portfolio.PortfolioSummary / PortfolioSnapshot)
+message PortfolioSnapshot {
+  string budget_id               = 1;
+  int64  total_current_value     = 2;
+  int64  total_open_cost_basis   = 3;
+  int64  total_realized_pnl      = 4;
+  int64  total_unrealized_pnl    = 5;
+  double total_return_pct        = 6;
+  string currency                = 7;
+}
+
 enum AssetStatus {
   ASSET_STATUS_UNSPECIFIED = 0;
   ASSET_STATUS_ACTIVE      = 1;
@@ -302,17 +340,6 @@ message InvestPortfolioSummary {
   int64  total_unrealized_pnl  = 4;
   double total_pnl_pct         = 5;
   repeated InvestAsset assets  = 6;
-}
-
-// RefreshPortfolio response payload — mirrors service.portfolio.PortfolioSummary
-message PortfolioSnapshot {
-  string budget_id               = 1;
-  int64  total_current_value     = 2;
-  int64  total_open_cost_basis   = 3;
-  int64  total_realized_pnl      = 4;
-  int64  total_unrealized_pnl    = 5;
-  double total_return_pct        = 6;
-  string currency                = 7;
 }
 
 message PriceSnapshot {
@@ -411,18 +438,6 @@ service BudgetService {
   // Force-close: sets budget status to 'closed' immediately (admin only)
   rpc ForceCloseBudget(ForceCloseBudgetRequest) returns (ForceCloseBudgetResponse) {}
 
-  message ForceCloseBudgetRequest  { string budget_id = 1; }
-  message ForceCloseBudgetResponse { InvestPortfolioSummary summary = 1; }
-
-  rpc RefreshPortfolio(RefreshPortfolioRequest) returns (RefreshPortfolioResponse) {
-    option (google.api.http) = {
-      post: "/budgets/{budget_id}/portfolio/refresh"
-      body: "*"
-    };
-  }
-  message RefreshPortfolioRequest  { string budget_id = 1; }
-  message RefreshPortfolioResponse { PortfolioSnapshot snapshot = 1; }
-
   // Role authority (internal — no public HTTP binding)
   rpc CheckRole(CheckRoleRequest) returns (CheckRoleResponse) {}
 
@@ -476,6 +491,11 @@ service BudgetService {
   }
   rpc GetInvestPortfolioSummary(GetInvestPortfolioSummaryRequest) returns (InvestPortfolioSummary) {
     option (google.api.http) = { get: "/budgets/{budget_id}/invest/portfolio" };
+  }
+
+  // Refresh portfolio: force-fetch fresh prices for all assets in a budget
+  rpc RefreshPortfolio(RefreshPortfolioRequest) returns (RefreshPortfolioResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/portfolio/refresh" body: "*" };
   }
 
   // Price snapshots

@@ -85,6 +85,25 @@ impl BudgetBiz {
         Ok(map_budget(db))
     }
 
+    /// Applies validated period settings to a budget and returns the refreshed budget.
+    pub async fn apply_period(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        start_day: Option<i32>,
+        timezone: Option<&str>,
+    ) -> Result<(), Status> {
+        let (day, tz) = crate::manager::validate::period_settings(start_day, timezone)?;
+        if day.is_none() && tz.is_none() {
+            return Ok(());
+        }
+        let _ = user_id;
+        self.repo
+            .set_budget_period(budget_id, day, tz.as_deref())
+            .await
+            .map_err(Self::internal)
+    }
+
     pub async fn get_budget(
         &self,
         user_id: &str,

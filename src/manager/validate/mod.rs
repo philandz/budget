@@ -79,3 +79,30 @@ pub fn user_type_from_metadata(meta: &tonic::metadata::MetadataMap) -> Option<St
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
 }
+
+pub const DEFAULT_TIMEZONE: &str = "Asia/Ho_Chi_Minh";
+
+/// Validates optional period settings: start day 1..=28 and an IANA timezone name.
+pub fn period_settings(
+    start_day: Option<i32>,
+    timezone: Option<&str>,
+) -> Result<(Option<u8>, Option<String>), Status> {
+    let day = match start_day {
+        Some(d) if (1..=28).contains(&d) => Some(d as u8),
+        Some(_) => {
+            return Err(Status::invalid_argument(
+                "period_start_day must be between 1 and 28",
+            ))
+        }
+        None => None,
+    };
+    let tz = match timezone.map(str::trim) {
+        Some("") | None => None,
+        Some(name) => {
+            name.parse::<chrono_tz::Tz>()
+                .map_err(|_| Status::invalid_argument("timezone must be an IANA name"))?;
+            Some(name.to_string())
+        }
+    };
+    Ok((day, tz))
+}

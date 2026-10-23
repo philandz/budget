@@ -44,7 +44,9 @@ impl BudgetService for BudgetHandler {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let req = request.into_inner();
         let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Standard);
-        let budget = self
+        // validate before creating so a bad value never leaves a half-configured budget
+        validate::period_settings(req.period_start_day, req.timezone.as_deref())?;
+        let mut budget = self
             .biz
             .create_budget(
                 &user_id,
@@ -59,6 +61,18 @@ impl BudgetService for BudgetHandler {
                 },
             )
             .await?;
+        if req.period_start_day.is_some() || req.timezone.is_some() {
+            let id = budget.base.as_ref().map(|b| b.id.clone()).unwrap_or_default();
+            self.biz
+                .apply_period(&user_id, &id, req.period_start_day, req.timezone.as_deref())
+                .await?;
+            if let Some(d) = req.period_start_day {
+                budget.period_start_day = d;
+            }
+            if let Some(tz) = req.timezone.clone().filter(|t| !t.trim().is_empty()) {
+                budget.timezone = tz;
+            }
+        }
         Ok(Response::new(CreateBudgetResponse {
             budget: Some(budget),
         }))
@@ -116,7 +130,8 @@ impl BudgetService for BudgetHandler {
         validate::budget_name(&req.name)?;
         // Unspecified/unknown means "keep the current type" (it is immutable).
         let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Unspecified);
-        let budget = self
+        validate::period_settings(req.period_start_day, req.timezone.as_deref())?;
+        let mut budget = self
             .biz
             .update_budget(
                 &user_id,
@@ -127,6 +142,22 @@ impl BudgetService for BudgetHandler {
                 user_type.as_deref(),
             )
             .await?;
+        if req.period_start_day.is_some() || req.timezone.is_some() {
+            self.biz
+                .apply_period(
+                    &user_id,
+                    &req.budget_id,
+                    req.period_start_day,
+                    req.timezone.as_deref(),
+                )
+                .await?;
+            if let Some(d) = req.period_start_day {
+                budget.period_start_day = d;
+            }
+            if let Some(tz) = req.timezone.clone().filter(|t| !t.trim().is_empty()) {
+                budget.timezone = tz;
+            }
+        }
         Ok(Response::new(UpdateBudgetResponse {
             budget: Some(budget),
         }))
@@ -206,13 +237,17 @@ impl BudgetService for BudgetHandler {
             .await?;
         // Budget context for callers that need it (entry transfers). Only for members,
         // so a non-member learns nothing about the budget.
-        let (org_id, currency, budget_type, name) = if is_member {
+        let (org_id, currency, budget_type, name, period_start_day, timezone) = if is_member {
             match self.biz.repo.get_budget_by_id(&req.budget_id).await {
                 Ok(b) => (
                     b.org_id.clone(),
                     b.currency.clone(),
                     crate::converters::budget_type_from_db(&b.budget_type) as i32,
                     b.name.clone(),
+                    b.period_start_day.unwrap_or(1),
+                    b.timezone
+                        .clone()
+                        .unwrap_or_else(|| validate::DEFAULT_TIMEZONE.to_string()),
                 ),
                 Err(_) => Default::default(),
             }
@@ -226,6 +261,8 @@ impl BudgetService for BudgetHandler {
             currency,
             budget_type,
             name,
+            period_start_day,
+            timezone,
         }))
     }
 
