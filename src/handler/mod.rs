@@ -204,9 +204,28 @@ impl BudgetService for BudgetHandler {
             .biz
             .check_role(&req.user_id, &req.budget_id, user_type.as_deref())
             .await?;
+        // Budget context for callers that need it (entry transfers). Only for members,
+        // so a non-member learns nothing about the budget.
+        let (org_id, currency, budget_type, name) = if is_member {
+            match self.biz.repo.get_budget_by_id(&req.budget_id).await {
+                Ok(b) => (
+                    b.org_id.clone(),
+                    b.currency.clone(),
+                    crate::converters::budget_type_from_db(&b.budget_type) as i32,
+                    b.name.clone(),
+                ),
+                Err(_) => Default::default(),
+            }
+        } else {
+            Default::default()
+        };
         Ok(Response::new(CheckRoleResponse {
             role: role as i32,
             is_member,
+            org_id,
+            currency,
+            budget_type,
+            name,
         }))
     }
 

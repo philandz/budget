@@ -159,6 +159,12 @@ message CheckRoleRequest {
 message CheckRoleResponse {
   BudgetRole role     = 1;
   bool       is_member = 2;
+  // Budget context so callers (e.g. entry transfers) need no second lookup.
+  // Empty/UNSPECIFIED when the caller is not a member.
+  string     org_id      = 3;
+  string     currency    = 4;
+  BudgetType budget_type = 5;
+  string     name        = 6;
 }
 
 // ---------------------------------------------------------------------------
