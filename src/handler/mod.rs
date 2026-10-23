@@ -114,7 +114,8 @@ impl BudgetService for BudgetHandler {
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
         validate::budget_name(&req.name)?;
-        let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Standard);
+        // Unspecified/unknown means "keep the current type" (it is immutable).
+        let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Unspecified);
         let budget = self
             .biz
             .update_budget(

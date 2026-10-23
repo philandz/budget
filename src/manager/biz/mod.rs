@@ -174,6 +174,15 @@ impl BudgetBiz {
     ) -> Result<Budget, Status> {
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
+        let current = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        let budget_type = crate::manager::validate::resolve_budget_type(
+            crate::converters::budget_type_from_db(&current.budget_type),
+            budget_type,
+        )?;
         let db = self
             .repo
             .update_budget(budget_id, name, budget_type, is_private, user_id)

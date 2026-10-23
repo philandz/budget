@@ -32,6 +32,21 @@ pub fn budget_type(t: i32) -> Result<BudgetType, Status> {
     BudgetType::try_from(t).map_err(|_| Status::invalid_argument("Unknown budget type"))
 }
 
+/// budget_type is immutable after creation: switching a budget between kinds
+/// (e.g. standard -> sharing) would orphan its data. `Unspecified` means "not
+/// provided" and keeps the current type; any other differing value is refused.
+pub fn resolve_budget_type(
+    current: BudgetType,
+    requested: BudgetType,
+) -> Result<BudgetType, Status> {
+    if requested == BudgetType::Unspecified || requested == current {
+        return Ok(current);
+    }
+    Err(Status::failed_precondition(
+        "budget_type cannot be changed after the budget is created",
+    ))
+}
+
 pub fn budget_role(r: i32) -> Result<BudgetRole, Status> {
     BudgetRole::try_from(r).map_err(|_| Status::invalid_argument("Unknown budget role"))
 }
