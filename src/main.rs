@@ -73,19 +73,23 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
     );
-    let portfolio_biz = Arc::new(PortfolioBiz::new(
-        (*portfolio_repo).clone(),
-        IdentityClient::from_channel(
-            philand_application::connect::connect_default(&identity_url)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
-                })?,
-        ),
-        biz.clone(),
-        fx_svc.clone(),
-    ));
+    let portfolio_biz = Arc::new(
+        PortfolioBiz::new(
+            (*portfolio_repo).clone(),
+            IdentityClient::from_channel(
+                philand_application::connect::connect_default(&identity_url)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
+                    })?,
+            ),
+            biz.clone(),
+            fx_svc.clone(),
+        )
+        .with_entry_client(entry_client()?),
+    );
     let grpc_handler = BudgetHandler::new(biz.clone(), portfolio_biz.clone());
+    spawn_fund_reconcile(portfolio_biz.clone());
 
     // Reuse the same pool for the scheduled refresh job.
 
@@ -101,18 +105,21 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
     );
-    let portfolio_biz = Arc::new(PortfolioBiz::new(
-        (*portfolio_repo).clone(),
-        IdentityClient::from_channel(
-            philand_application::connect::connect_default(&identity_url)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
-                })?,
-        ),
-        biz.clone(),
-        fx_svc.clone(),
-    ));
+    let portfolio_biz = Arc::new(
+        PortfolioBiz::new(
+            (*portfolio_repo).clone(),
+            IdentityClient::from_channel(
+                philand_application::connect::connect_default(&identity_url)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
+                    })?,
+            ),
+            biz.clone(),
+            fx_svc.clone(),
+        )
+        .with_entry_client(entry_client()?),
+    );
     let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
 
     // Reuse the same pool for the scheduled refresh job.
@@ -192,4 +199,26 @@ async fn main() -> anyhow::Result<()> {
 
 pub async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "service": "budget" }))
+}
+
+/// Entry service client for the fund transfer saga. Lazy: budget and entry call each other.
+fn entry_client() -> anyhow::Result<budget::manager::client::EntryClient> {
+    let url =
+        std::env::var("ENTRY_GRPC_URL").unwrap_or_else(|_| "http://127.0.0.1:50105".to_string());
+    budget::manager::client::EntryClient::connect_lazy(&url)
+}
+
+/// Rolls back fund transfers left half-done by a crash (older than 5 minutes), every 10 minutes.
+fn spawn_fund_reconcile(biz: Arc<PortfolioBiz>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+        loop {
+            tick.tick().await;
+            match biz.reconcile_stale_fund_transfers(300).await {
+                Ok(0) => {}
+                Ok(n) => tracing::warn!("fund reconcile rolled back {n} stale transfer(s)"),
+                Err(e) => tracing::error!("fund reconcile failed: {e}"),
+            }
+        }
+    });
 }

@@ -30,20 +30,33 @@ pub struct PortfolioBiz {
     pub identity_client: Arc<tokio::sync::Mutex<IdentityClient>>,
     pub budget_biz: Arc<BudgetBiz>,
     pub fx_svc: Arc<FxRateService>,
+    pub fund_repo: Arc<crate::manager::repository::fund_cash::FundCashRepository>,
+    /// Set via [`PortfolioBiz::with_entry_client`]; fund deposit/withdraw need it.
+    pub entry_client: Option<Arc<tokio::sync::Mutex<crate::manager::client::EntryClient>>>,
 }
 
 impl PortfolioBiz {
+    pub fn with_entry_client(mut self, c: crate::manager::client::EntryClient) -> Self {
+        self.entry_client = Some(Arc::new(tokio::sync::Mutex::new(c)));
+        self
+    }
+
     pub fn new(
         repo: PortfolioRepository,
         identity_client: IdentityClient,
         budget_biz: Arc<BudgetBiz>,
         fx_svc: Arc<FxRateService>,
     ) -> Self {
+        let fund_repo = Arc::new(crate::manager::repository::fund_cash::FundCashRepository::new(
+            repo.pool().clone(),
+        ));
         Self {
             repo: Arc::new(repo),
             identity_client: Arc::new(tokio::sync::Mutex::new(identity_client)),
             budget_biz,
             fx_svc,
+            fund_repo,
+            entry_client: None,
         }
     }
 
@@ -72,12 +85,16 @@ impl PortfolioBiz {
                 .expect("FxRateService::new failed — ensure FX rates are seeded in the DB"),
         );
         Self {
-            repo: Arc::new(PortfolioRepository::new(pool)),
+            repo: Arc::new(PortfolioRepository::new(pool.clone())),
             identity_client: Arc::new(tokio::sync::Mutex::new(
                 IdentityClient::test_only_unreachable(),
             )),
             budget_biz,
             fx_svc,
+            fund_repo: Arc::new(crate::manager::repository::fund_cash::FundCashRepository::new(
+                pool,
+            )),
+            entry_client: None,
         }
     }
 
@@ -343,6 +360,7 @@ impl PortfolioBiz {
         idempotency_key: Option<&str>,
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioAsset, Status> {
+        self.enforce_asset_policy(budget_id, pconv::AssetClassNew::SavingsAccount).await?;
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.assert_currency_lock(budget_id, currency).await?;
@@ -425,6 +443,7 @@ impl PortfolioBiz {
         idempotency_key: Option<&str>,
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioAsset, Status> {
+        self.enforce_asset_policy(budget_id, pconv::AssetClassNew::FixedDeposit).await?;
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.assert_currency_lock(budget_id, currency).await?;
@@ -515,6 +534,7 @@ impl PortfolioBiz {
         idempotency_key: Option<&str>,
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioAsset, Status> {
+        self.enforce_asset_policy(budget_id, pconv::AssetClassNew::GoldLot).await?;
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.assert_currency_lock(budget_id, currency).await?;
@@ -597,6 +617,7 @@ impl PortfolioBiz {
         idempotency_key: Option<&str>,
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioAsset, Status> {
+        self.enforce_asset_policy(budget_id, pconv::AssetClassNew::StockLot).await?;
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.assert_currency_lock(budget_id, currency).await?;
@@ -687,6 +708,7 @@ impl PortfolioBiz {
         idempotency_key: Option<&str>,
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioAsset, Status> {
+        self.enforce_asset_policy(budget_id, pconv::AssetClassNew::EtfLot).await?;
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.assert_currency_lock(budget_id, currency).await?;
@@ -787,6 +809,7 @@ impl PortfolioBiz {
         idempotency_key: Option<&str>,
         user_type: Option<&str>,
     ) -> Result<pb::PortfolioAsset, Status> {
+        self.enforce_asset_policy(budget_id, pconv::AssetClassNew::CryptoLot).await?;
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         self.assert_currency_lock(budget_id, currency).await?;
