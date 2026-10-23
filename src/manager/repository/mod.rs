@@ -859,6 +859,27 @@ impl BudgetRepository {
         Ok(val)
     }
 
+    /// Sum of expense entries in `[date_from, date_to)` (shared DB with Entry service).
+    pub async fn get_period_spend(
+        &self,
+        budget_id: &str,
+        date_from: &str,
+        date_to: &str,
+    ) -> Result<i64> {
+        let row = sqlx::query(
+            "SELECT CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) FROM entries
+             WHERE BINARY budget_id = BINARY ? AND kind = 'expense'
+               AND entry_date >= ? AND entry_date < ?
+               AND deleted_at IS NULL",
+        )
+        .bind(budget_id)
+        .bind(date_from)
+        .bind(date_to)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(sqlx::Row::get(&row, 0))
+    }
+
     /// Sum of expense entries in the current calendar month (shared DB with Entry service).
     pub async fn get_current_month_spend(&self, budget_id: &str) -> Result<i64> {
         let now = chrono::Utc::now();

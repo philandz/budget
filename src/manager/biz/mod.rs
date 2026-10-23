@@ -13,6 +13,7 @@ use crate::pb::service::budget::{
 };
 use crate::pb::shared::organization::OrgRole;
 
+pub mod envelope;
 pub mod portfolio;
 pub mod seed;
 
@@ -623,29 +624,35 @@ impl BudgetBiz {
         budget_id: &str,
         monthly_limit: i64,
     ) -> Result<EnvelopeLimit, Status> {
-        // `entries` lives in the entry-service DB; budget's DB does not have
-        // it. If the query errors (table missing, etc.), degrade to 0 spend
-        // rather than failing the whole burn-rate request.
+        // Follow the budget's own period (start day + timezone). `entries` is read through the
+        // shared DB; if that fails, degrade to 0 spend rather than failing the request.
+        let now = chrono::Utc::now();
+        let (start_day, tz) = match self.repo.get_budget_by_id(budget_id).await {
+            Ok(b) => (
+                b.period_start_day.unwrap_or(1).clamp(1, 28) as u8,
+                b.timezone
+                    .unwrap_or_else(|| crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
+            ),
+            Err(_) => (1, crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
+        };
+        let period = envelope::current_period(now, start_day, &tz);
         let current_spend = self
             .repo
-            .get_current_month_spend(budget_id)
+            .get_period_spend(
+                budget_id,
+                &philand_time::period::ymd(period.0),
+                &philand_time::period::ymd(period.1),
+            )
             .await
             .map_err(Self::internal)
             .unwrap_or(0);
 
-        let burn_rate_pct = if monthly_limit > 0 {
-            let now = chrono::Utc::now();
-            let (year, month, day) = (
-                now.format("%Y").to_string().parse::<i32>().unwrap_or(2026),
-                now.format("%m").to_string().parse::<i32>().unwrap_or(1),
-                now.format("%d").to_string().parse::<f64>().unwrap_or(1.0),
-            );
-            let days_in_month = days_in_month(year, month) as f64;
-            let projected = (current_spend as f64 / day) * days_in_month;
-            (projected / monthly_limit as f64) * 100.0
-        } else {
-            0.0
-        };
+        let burn_rate_pct = envelope::burn_rate_pct(
+            current_spend,
+            monthly_limit,
+            envelope::local_today(now, &tz),
+            period,
+        );
 
         Ok(EnvelopeLimit {
             budget_id: budget_id.to_string(),
@@ -1055,17 +1062,3 @@ impl BudgetBiz {
     }
 }
 
-fn days_in_month(year: i32, month: i32) -> i32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 30,
-    }
-}
