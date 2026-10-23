@@ -9,7 +9,7 @@ use tonic::Status;
 
 use crate::converters::portfolio as pconv;
 use crate::manager::biz::portfolio::interest::{compound_accrued, simple_accrued};
-use crate::manager::biz::portfolio::{InterestMethod, PriceFreshness};
+use crate::manager::biz::portfolio::{AssetStatus, InterestMethod, PriceFreshness};
 use crate::manager::repository::portfolio::PortfolioRepository;
 
 pub struct PortfolioValuation {
@@ -30,6 +30,11 @@ impl PortfolioValuation {
         asset: &pconv::DbPortfolioAsset,
         today: i64,
     ) -> Result<Valuation, Status> {
+        // Assets that left the portfolio (sold, withdrawn, rolled over, closed, archived) no longer
+        // hold value; counting them would double-count rollovers and settled deposits.
+        if !holds_value(AssetStatus::from_db(&asset.status)) {
+            return Ok(Valuation::settled());
+        }
         match asset.asset_class.as_str() {
             "savings_account" => {
                 let sub = self
@@ -95,6 +100,15 @@ impl PortfolioValuation {
                 let Some(sub) = sub else {
                     return Ok(Valuation::unpriced());
                 };
+                // Partial sales shrink the lot: value only the grams still held, at the
+                // proportional share of the original cost.
+                let total_grams = parse_decimal(&sub.quantity_grams).map_err(internal)?;
+                let sold_grams = self
+                    .repo
+                    .gold_sold_grams(tx, &asset.id)
+                    .await
+                    .map_err(internal)?;
+                let (open_grams, open_cost) = gold_open_position(total_grams, sold_grams, sub.purchase_cost);
                 let obs = self
                     .repo
                     .latest_price_observation(tx, &asset.id)
@@ -102,8 +116,8 @@ impl PortfolioValuation {
                     .map_err(internal)?;
                 let Some(obs) = obs else {
                     return Ok(Valuation {
-                        current_value: sub.purchase_cost,
-                        open_cost_basis: sub.purchase_cost,
+                        current_value: open_cost,
+                        open_cost_basis: open_cost,
                         realized_pnl: 0,
                         unrealized_pnl: 0,
                         accrued_interest: 0,
@@ -111,19 +125,15 @@ impl PortfolioValuation {
                         quote_observed_at: 0,
                     });
                 };
-                let grams_f = parse_decimal(&sub.quantity_grams)
-                    .map_err(internal)?
-                    .to_string()
-                    .parse::<f64>()
-                    .unwrap_or(0.0);
+                let grams_f = open_grams.to_string().parse::<f64>().unwrap_or(0.0);
                 let current_value = (grams_f * obs.unit_price as f64).round() as i64;
                 let freshness =
                     PriceFreshness::from_age_seconds((today - obs.observed_at).max(0), true);
                 Ok(Valuation {
                     current_value,
-                    open_cost_basis: sub.purchase_cost,
+                    open_cost_basis: open_cost,
                     realized_pnl: 0,
-                    unrealized_pnl: current_value - sub.purchase_cost,
+                    unrealized_pnl: current_value - open_cost,
                     accrued_interest: 0,
                     freshness: freshness as i32,
                     quote_observed_at: obs.observed_at,
@@ -228,7 +238,42 @@ pub struct Valuation {
     pub quote_observed_at: i64,
 }
 
+/// Whether an asset in this status still counts towards portfolio value.
+pub fn holds_value(status: AssetStatus) -> bool {
+    matches!(status, AssetStatus::Active | AssetStatus::Matured)
+}
+
+/// Grams still held and the proportional share of the original cost they carry.
+pub fn gold_open_position(
+    total_grams: rust_decimal::Decimal,
+    sold_grams: rust_decimal::Decimal,
+    purchase_cost: i64,
+) -> (rust_decimal::Decimal, i64) {
+    use rust_decimal::prelude::ToPrimitive;
+    let open = (total_grams - sold_grams).max(rust_decimal::Decimal::ZERO);
+    if total_grams <= rust_decimal::Decimal::ZERO {
+        return (open, 0);
+    }
+    let cost = (rust_decimal::Decimal::from(purchase_cost) * open / total_grams)
+        .round()
+        .to_i64()
+        .unwrap_or(0);
+    (open, cost)
+}
+
 impl Valuation {
+    fn settled() -> Self {
+        Self {
+            current_value: 0,
+            open_cost_basis: 0,
+            realized_pnl: 0,
+            unrealized_pnl: 0,
+            accrued_interest: 0,
+            freshness: PriceFreshness::Fresh as i32,
+            quote_observed_at: 0,
+        }
+    }
+
     fn unpriced() -> Self {
         Self {
             current_value: 0,
@@ -257,4 +302,45 @@ pub fn today_business_date() -> i64 {
     let now_utc = chrono::Utc::now();
     let ict = now_utc + chrono::Duration::hours(7);
     ict.timestamp() - (ict.timestamp() % 86_400)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    fn d(s: &str) -> Decimal {
+        Decimal::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn only_active_and_matured_assets_hold_value() {
+        assert!(holds_value(AssetStatus::Active));
+        assert!(holds_value(AssetStatus::Matured));
+        for s in [
+            AssetStatus::Closed,
+            AssetStatus::Sold,
+            AssetStatus::Archived,
+            AssetStatus::RolledOver,
+            AssetStatus::Withdrawn,
+            AssetStatus::EarlyClosed,
+        ] {
+            assert!(!holds_value(s), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn gold_partial_sale_keeps_proportional_cost() {
+        // 10 g bought for 10,000,000; 4 g sold → 6 g and 6,000,000 left.
+        let (open, cost) = gold_open_position(d("10"), d("4"), 10_000_000);
+        assert_eq!(open, d("6"));
+        assert_eq!(cost, 6_000_000);
+        // sold everything
+        assert_eq!(gold_open_position(d("10"), d("10"), 10_000_000), (d("0"), 0));
+        // over-sold input never goes negative
+        assert_eq!(gold_open_position(d("10"), d("11"), 10_000_000).0, d("0"));
+        // empty lot
+        assert_eq!(gold_open_position(d("0"), d("0"), 5), (d("0"), 0));
+    }
 }

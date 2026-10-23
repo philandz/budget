@@ -816,6 +816,40 @@ impl PortfolioRepository {
         Ok(())
     }
 
+    /// Σ grams already sold from a gold lot.
+    pub async fn gold_sold_grams(
+        &self,
+        tx: &mut Transaction<'_, MySql>,
+        asset_id: &str,
+    ) -> Result<Decimal> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT quantity_grams_sold FROM portfolio_gold_disposals WHERE asset_id = ?",
+        )
+        .bind(asset_id)
+        .fetch_all(&mut **tx)
+        .await?;
+        let mut total = Decimal::ZERO;
+        for (q,) in rows {
+            total += q.parse::<Decimal>().map_err(|e| anyhow!("bad grams {q:?}: {e}"))?;
+        }
+        Ok(total)
+    }
+
+    /// Σ cost basis already allocated to earlier sales of a gold lot.
+    pub async fn gold_cost_allocated(
+        &self,
+        tx: &mut Transaction<'_, MySql>,
+        asset_id: &str,
+    ) -> Result<i64> {
+        let v: Option<i64> = sqlx::query_scalar(
+            "SELECT CAST(SUM(cost_basis_allocated) AS SIGNED) FROM portfolio_gold_disposals WHERE asset_id = ?",
+        )
+        .bind(asset_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(v.unwrap_or(0))
+    }
+
     // -----------------------------------------------------------------------
     // Price observations
     // -----------------------------------------------------------------------
