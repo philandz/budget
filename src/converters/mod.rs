@@ -36,8 +36,11 @@ pub struct DbBudget {
     #[sqlx(default)]
     pub timezone: Option<String>,
     // real portfolio totals (populated via JOIN with invest_assets for admin list)
+    #[sqlx(default)]
     pub asset_count: Option<i32>,
+    #[sqlx(default)]
     pub total_current_value: Option<i64>,
+    #[sqlx(default)]
     pub total_cost_basis: Option<i64>,
 }
 
