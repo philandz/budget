@@ -15,18 +15,6 @@ use crate::pb::shared::organization::OrgRole;
 
 pub mod envelope;
 
-/// `[first day of this month, first day of next month)` as YYYY-MM-DD strings (UTC).
-fn month_window(now: chrono::DateTime<chrono::Utc>) -> (String, String) {
-    use chrono::Datelike;
-    let first = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1).expect("valid month start");
-    let next = if now.month() == 12 {
-        chrono::NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
-    } else {
-        chrono::NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
-    }
-    .expect("valid next month");
-    (first.format("%Y-%m-%d").to_string(), next.format("%Y-%m-%d").to_string())
-}
 pub mod portfolio;
 pub mod seed;
 
@@ -59,26 +47,64 @@ impl BudgetBiz {
         self
     }
 
-    /// Fills `current_spend` (expenses in the current calendar month) for the given rows.
-    /// Best effort: if Entry is unreachable the spend stays 0 and the read still succeeds.
-    async fn fill_spend(&self, caller: &str, rows: &mut [crate::converters::DbBudget]) {
+    /// Fills `current_spend` (expenses in the budget's current period) for the given rows.
+    ///
+    /// The window follows each budget's OWN period settings (`period_start_day` +
+    /// `timezone`) — the same period the burn rate uses — so the list, the
+    /// detail view and the burn rate never disagree. Budgets are grouped by
+    /// their period settings because `GetPeriodTotals` takes one window for the
+    /// whole request.
+    ///
+    /// Errors are propagated on purpose: reporting `current_spend = 0` when the
+    /// Entry service is unreachable would render over-budget budgets as "OK".
+    async fn fill_spend(
+        &self,
+        caller: &str,
+        rows: &mut [crate::converters::DbBudget],
+    ) -> Result<(), Status> {
         let Some(client) = &self.entry_client else {
-            return;
+            return Ok(());
         };
         if rows.is_empty() {
-            return;
+            return Ok(());
         }
         let now = chrono::Utc::now();
-        let (from, to) = month_window(now);
-        let ids = rows.iter().map(|r| r.id.clone()).collect();
-        match client.lock().await.expense_by_budget(caller, ids, &from, &to).await {
-            Ok(map) => {
-                for r in rows.iter_mut() {
-                    r.current_spend = Some(map.get(&r.id).copied().unwrap_or(0));
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "entry spend lookup failed; current_spend left at 0"),
+
+        // One window per distinct period setting.
+        let mut groups: std::collections::HashMap<(u8, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for r in rows.iter() {
+            let start_day = r.period_start_day.unwrap_or(1).clamp(1, 28) as u8;
+            let tz = r
+                .timezone
+                .clone()
+                .unwrap_or_else(|| crate::manager::validate::DEFAULT_TIMEZONE.to_string());
+            groups
+                .entry((start_day, tz))
+                .or_default()
+                .push(r.id.clone());
         }
+
+        let mut spend: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        for ((start_day, tz), ids) in groups {
+            let (from, to) = envelope::current_period(now, start_day, &tz);
+            let map = client
+                .lock()
+                .await
+                .expense_by_budget(
+                    caller,
+                    ids,
+                    &from.format("%Y-%m-%d").to_string(),
+                    &to.format("%Y-%m-%d").to_string(),
+                )
+                .await?;
+            spend.extend(map);
+        }
+
+        for r in rows.iter_mut() {
+            r.current_spend = Some(spend.get(&r.id).copied().unwrap_or(0));
+        }
+        Ok(())
     }
 
     /// Enables seeding default categories on budget creation.
@@ -100,7 +126,11 @@ impl BudgetBiz {
         let Some(client) = &self.category_client else {
             return;
         };
-        let budget_id = budget.base.as_ref().map(|b| b.id.clone()).unwrap_or_default();
+        let budget_id = budget
+            .base
+            .as_ref()
+            .map(|b| b.id.clone())
+            .unwrap_or_default();
         let budget_type = BudgetType::try_from(budget.budget_type).unwrap_or(BudgetType::Standard);
         let items = seed::seed_items(
             template_id,
@@ -250,7 +280,8 @@ impl BudgetBiz {
             .get_budget_for_user(budget_id, user_id, Some(role_label))
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
-        self.fill_spend(user_id, std::slice::from_mut(&mut db)).await;
+        self.fill_spend(user_id, std::slice::from_mut(&mut db))
+            .await?;
         Ok(map_budget(db))
     }
 
@@ -260,8 +291,28 @@ impl BudgetBiz {
             .get_budget_by_id(budget_id)
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
-        self.fill_spend("system", std::slice::from_mut(&mut db)).await;
+        self.fill_spend("system", std::slice::from_mut(&mut db))
+            .await?;
         Ok(map_budget(db))
+    }
+
+    /// Reads only the status and type of a budget.
+    ///
+    /// This backs the internal `GetBudgetStatus` RPC that the sharing service
+    /// calls to guard writes on archived budgets. It deliberately does NOT
+    /// compute `current_spend`: that would make every write depend on the
+    /// Entry service being up, and a slow Entry would block writes to budgets
+    /// that are perfectly writable.
+    pub async fn get_budget_status(&self, budget_id: &str) -> Result<(String, BudgetType), Status> {
+        let db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        Ok((
+            db.status,
+            crate::converters::budget_type_from_db(&db.budget_type),
+        ))
     }
 
     pub async fn list_members_admin(
@@ -376,7 +427,7 @@ impl BudgetBiz {
             .list_budgets_for_user(org_id, user_id)
             .await
             .map_err(Self::internal)?;
-        self.fill_spend(user_id, &mut rows).await;
+        self.fill_spend(user_id, &mut rows).await?;
         Ok(rows.into_iter().map(map_budget).collect())
     }
 
@@ -421,7 +472,7 @@ impl BudgetBiz {
             .await
             .map_err(Self::internal)?;
 
-        self.fill_spend(user_id, &mut rows).await;
+        self.fill_spend(user_id, &mut rows).await?;
 
         let total_pages = if total == 0 {
             0
@@ -457,7 +508,7 @@ impl BudgetBiz {
             .list_budgets_admin(org_id, budget_type, name_search, page, page_size)
             .await
             .map_err(Self::internal)?;
-        self.fill_spend(caller_id, &mut rows).await;
+        self.fill_spend(caller_id, &mut rows).await?;
         Ok((rows.into_iter().map(map_budget).collect(), total))
     }
 
@@ -1152,24 +1203,5 @@ impl BudgetBiz {
             }
             _ => Ok((0, 0, 0, 0.0, String::new())),
         }
-    }
-}
-
-
-#[cfg(test)]
-mod month_window_tests {
-    use super::month_window;
-    use chrono::TimeZone;
-
-    #[test]
-    fn mid_month() {
-        let now = chrono::Utc.with_ymd_and_hms(2026, 10, 23, 8, 0, 0).unwrap();
-        assert_eq!(month_window(now), ("2026-10-01".into(), "2026-11-01".into()));
-    }
-
-    #[test]
-    fn december_rolls_into_next_year() {
-        let now = chrono::Utc.with_ymd_and_hms(2026, 12, 31, 23, 0, 0).unwrap();
-        assert_eq!(month_window(now), ("2026-12-01".into(), "2027-01-01".into()));
     }
 }

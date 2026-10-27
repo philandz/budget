@@ -225,10 +225,13 @@ impl BudgetService for BudgetHandler {
         request: Request<GetBudgetStatusRequest>,
     ) -> Result<Response<GetBudgetStatusResponse>, Status> {
         let req = request.into_inner();
-        let b = self.biz.get_budget_admin(&req.budget_id).await?;
+        // Status + type only: this RPC is on the write-guard path, so it must
+        // not depend on the Entry service.
+        let (status, budget_type) = self.biz.get_budget_status(&req.budget_id).await?;
         Ok(Response::new(GetBudgetStatusResponse {
-            status: b.status,
-            budget_type: b.budget_type,
+            status,
+            // The generated field is the enum's i32 discriminant.
+            budget_type: budget_type as i32,
         }))
     }
 
