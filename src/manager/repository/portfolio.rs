@@ -830,7 +830,9 @@ impl PortfolioRepository {
         .await?;
         let mut total = Decimal::ZERO;
         for (q,) in rows {
-            total += q.parse::<Decimal>().map_err(|e| anyhow!("bad grams {q:?}: {e}"))?;
+            total += q
+                .parse::<Decimal>()
+                .map_err(|e| anyhow!("bad grams {q:?}: {e}"))?;
         }
         Ok(total)
     }

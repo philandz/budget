@@ -108,7 +108,8 @@ impl PortfolioValuation {
                     .gold_sold_grams(tx, &asset.id)
                     .await
                     .map_err(internal)?;
-                let (open_grams, open_cost) = gold_open_position(total_grams, sold_grams, sub.purchase_cost);
+                let (open_grams, open_cost) =
+                    gold_open_position(total_grams, sold_grams, sub.purchase_cost);
                 let obs = self
                     .repo
                     .latest_price_observation(tx, &asset.id)
@@ -337,7 +338,10 @@ mod tests {
         assert_eq!(open, d("6"));
         assert_eq!(cost, 6_000_000);
         // sold everything
-        assert_eq!(gold_open_position(d("10"), d("10"), 10_000_000), (d("0"), 0));
+        assert_eq!(
+            gold_open_position(d("10"), d("10"), 10_000_000),
+            (d("0"), 0)
+        );
         // over-sold input never goes negative
         assert_eq!(gold_open_position(d("10"), d("11"), 10_000_000).0, d("0"));
         // empty lot

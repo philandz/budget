@@ -121,7 +121,6 @@ impl BudgetRepository {
         user_id: &str,
         override_role: Option<&str>,
     ) -> Result<DbBudget> {
-
         let fallback_role = override_role.unwrap_or("");
         let row = sqlx::query_as::<_, DbBudget>(
             r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
@@ -153,7 +152,6 @@ impl BudgetRepository {
     }
 
     pub async fn get_budget_by_id(&self, budget_id: &str) -> Result<DbBudget> {
-
         let row = sqlx::query_as::<_, DbBudget>(
             r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                     b.created_by, b.created_at, b.updated_at, b.deleted_at,
@@ -347,7 +345,6 @@ impl BudgetRepository {
         org_id: &str,
         user_id: &str,
     ) -> Result<Vec<DbBudget>> {
-
         let rows = sqlx::query_as::<_, DbBudget>(
             r#"SELECT
                   b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
@@ -389,7 +386,6 @@ impl BudgetRepository {
         page: i32,
         page_size: i32,
     ) -> Result<(Vec<DbBudget>, i64)> {
-
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
         let offset = (page - 1) * page_size;
@@ -551,7 +547,6 @@ impl BudgetRepository {
         page: i32,
         page_size: i32,
     ) -> Result<(Vec<DbBudget>, i32)> {
-
         let offset = (page - 1) * page_size;
 
         let base_where = if org_id.is_empty() {
