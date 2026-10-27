@@ -39,6 +39,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
 
+    // The proto sources live OUTSIDE this package (they are shared through the
+    // sibling `protobuf/` repo), so Cargo would not re-run this build script
+    // when they change and the generated code would silently go stale.
+    for f in &file_refs {
+        println!("cargo:rerun-if-changed={f}");
+    }
+
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
