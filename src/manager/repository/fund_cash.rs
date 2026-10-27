@@ -27,6 +27,20 @@ pub struct AppliedMovement {
     pub replayed: bool,
 }
 
+/// Outcome of trying to claim a transfer for rollback.
+///
+/// The claim is the mutual-exclusion point between a request that is still in flight and the
+/// reconciler: exactly one of them can move the row out of `requested`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferClaim {
+    /// The row was still `requested`; this caller now owns the rollback.
+    Claimed,
+    /// The row was already claimed (`reconciling`) by an earlier sweep that never finished.
+    AlreadyClaimed,
+    /// The row moved on (`completed` / `failed`): it must not be touched.
+    Lost,
+}
+
 /// MySQL deadlock (1213) or lock wait timeout (1205): safe to retry the whole transaction.
 fn is_retryable(e: &sqlx::Error) -> bool {
     e.as_database_error()
@@ -257,18 +271,24 @@ impl FundCashRepository {
     }
 
     /// `status` is one of the `portfolio_transfers.status` strings (e.g. "completed", "failed").
+    ///
+    /// The write only lands while the row is still `requested`. A transfer the reconciler has
+    /// claimed (`reconciling`) or that is already `completed` / `failed` is never overwritten,
+    /// so a late writer cannot resurrect a transfer that was rolled back.
+    ///
+    /// Returns true when the row was updated (the caller still owned the transfer).
     pub async fn set_transfer_status(
         &self,
         transfer_id: &str,
         status: &str,
         linked_entry_id: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<bool, sqlx::Error> {
         let completed_at = (status == "completed").then(now_unix);
-        sqlx::query(
+        let res = sqlx::query(
             "UPDATE portfolio_transfers
                 SET status = ?, completed_at = COALESCE(?, completed_at),
                     linked_entry_source_id = COALESCE(?, linked_entry_source_id)
-              WHERE id = ?",
+              WHERE id = ? AND status = 'requested'",
         )
         .bind(status)
         .bind(completed_at)
@@ -276,9 +296,51 @@ impl FundCashRepository {
         .bind(transfer_id)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(res.rows_affected() == 1)
     }
 
+    /// Claims a transfer for rollback by moving it out of `requested` into `reconciling`.
+    ///
+    /// The conditional UPDATE is the only place where the request path and the reconciler meet:
+    /// a request that completes at the same time loses the row and is told to compensate, and a
+    /// transfer that already reached `completed` can never be claimed — so the reconciler never
+    /// voids a finished transfer.
+    pub async fn claim_transfer(&self, transfer_id: &str) -> Result<TransferClaim, sqlx::Error> {
+        let res = sqlx::query(
+            "UPDATE portfolio_transfers SET status = 'reconciling' WHERE id = ? AND status = 'requested'",
+        )
+        .bind(transfer_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 1 {
+            return Ok(TransferClaim::Claimed);
+        }
+        // Not `requested` any more: either an earlier sweep left it claimed, or it is done.
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM portfolio_transfers WHERE id = ?")
+                .bind(transfer_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(match status.as_deref() {
+            Some("reconciling") => TransferClaim::AlreadyClaimed,
+            _ => TransferClaim::Lost,
+        })
+    }
+
+    /// Marks a claimed transfer as failed. Only lands while the row is still `reconciling`, so a
+    /// transfer that finished in the meantime is never demoted.
+    pub async fn mark_reconciled_failed(&self, transfer_id: &str) -> Result<bool, sqlx::Error> {
+        let res = sqlx::query(
+            "UPDATE portfolio_transfers SET status = 'failed' WHERE id = ? AND status = 'reconciling'",
+        )
+        .bind(transfer_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    /// Transfers that are still waiting for their saga to finish: `requested` rows and rows a
+    /// previous sweep claimed (`reconciling`) but never managed to roll back.
     pub async fn list_stale_requested(
         &self,
         created_before: i64,
@@ -289,10 +351,33 @@ impl FundCashRepository {
                       linked_entry_source_id, linked_entry_counterparty_id,
                       idempotency_key, actor_user_id, created_at, completed_at, notes
                  FROM portfolio_transfers
-                WHERE status = 'requested' AND created_at < ?
+                WHERE status IN ('requested', 'reconciling') AND created_at < ?
                   AND direction IN ('standard_to_invest','invest_to_standard')"#,
         )
         .bind(created_before)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Fixed deposits of a budget that mature inside `[from, to]`.
+    /// Returns `(asset_id, display_name, maturity_date, principal)`.
+    pub async fn upcoming_maturities(
+        &self,
+        budget_id: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<(String, String, i64, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (String, String, i64, i64)>(
+            r#"SELECT a.id, a.display_name, fd.maturity_date, fd.principal
+                 FROM portfolio_assets a
+                 JOIN portfolio_fixed_deposits fd ON fd.asset_id = a.id
+                WHERE a.budget_id = ? AND a.deleted_at IS NULL AND a.status = 'active'
+                  AND fd.maturity_date BETWEEN ? AND ?
+                ORDER BY fd.maturity_date"#,
+        )
+        .bind(budget_id)
+        .bind(from)
+        .bind(to)
         .fetch_all(&self.pool)
         .await
     }

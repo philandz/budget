@@ -13,7 +13,7 @@ use crate::converters::fund::{map_movement, NewFundMovement};
 use crate::converters::portfolio::AssetClassNew;
 use crate::manager::biz::portfolio::biz::PortfolioBiz;
 use crate::manager::biz::portfolio::policy;
-use crate::manager::repository::fund_cash::FundCashError;
+use crate::manager::repository::fund_cash::{FundCashError, TransferClaim};
 use crate::pb::service::budget::{BudgetRole, BudgetType};
 use crate::pb::service::entry::{CreateTransferLegRequest, EntryKind, VoidTransferLegRequest};
 use crate::pb::service::portfolio as pb;
@@ -211,20 +211,11 @@ impl PortfolioBiz {
         budget_id: &str,
         horizon: i64,
     ) -> Result<Vec<pb::UpcomingMaturity>, Status> {
-        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
-            r#"SELECT a.id, a.display_name, fd.maturity_date, fd.principal
-                 FROM portfolio_assets a
-                 JOIN portfolio_fixed_deposits fd ON fd.asset_id = a.id
-                WHERE a.budget_id = ? AND a.deleted_at IS NULL AND a.status = 'active'
-                  AND fd.maturity_date BETWEEN ? AND ?
-                ORDER BY fd.maturity_date"#,
-        )
-        .bind(budget_id)
-        .bind(now_unix())
-        .bind(horizon)
-        .fetch_all(self.repo.pool())
-        .await
-        .unwrap_or_default();
+        let rows = self
+            .fund_repo
+            .upcoming_maturities(budget_id, now_unix(), horizon)
+            .await
+            .map_err(internal)?;
         Ok(rows
             .into_iter()
             .map(
@@ -347,34 +338,76 @@ impl PortfolioBiz {
             .await;
         match applied {
             Ok(a) => {
-                let _ = self
+                let entry_id = entry
+                    .base
+                    .as_ref()
+                    .map(|b| b.id.clone())
+                    .unwrap_or_default();
+                match self
                     .fund_repo
-                    .set_transfer_status(
-                        &group_id,
-                        "completed",
-                        Some(
-                            &entry
-                                .base
-                                .as_ref()
-                                .map(|b| b.id.clone())
-                                .unwrap_or_default(),
-                        ),
-                    )
-                    .await;
-                Ok(pb::FundTransferResponse {
-                    movement: Some(map_movement(a.movement)),
-                    cash_balance: a.balance_after,
-                    transfer_group_id: group_id,
-                })
+                    .set_transfer_status(&group_id, "completed", Some(&entry_id))
+                    .await
+                {
+                    Ok(true) => Ok(pb::FundTransferResponse {
+                        movement: Some(map_movement(a.movement)),
+                        cash_balance: a.balance_after,
+                        transfer_group_id: group_id,
+                    }),
+                    Ok(false) => {
+                        // The reconciler claimed this transfer while we were working, so it owns
+                        // the rollback. Undo our own steps: the money must not stay half moved.
+                        if let Err(ce) = self
+                            .compensate_transfer(
+                                user_id,
+                                user_type,
+                                &req.counterparty_budget_id,
+                                &req.budget_id,
+                                &fund.currency,
+                                key,
+                                &group_id,
+                            )
+                            .await
+                        {
+                            tracing::error!(
+                                "fund deposit compensation failed transfer_id={group_id} idempotency_key={key} err={ce}"
+                            );
+                        }
+                        Err(Status::aborted(
+                            "transfer was rolled back by reconciliation; please retry",
+                        ))
+                    }
+                    Err(e) => Err(internal(e)),
+                }
             }
             Err(e) => {
                 // Compensate: void the entry leg so the standard budget is not debited.
-                self.void_leg(user_id, user_type, &req.counterparty_budget_id, key)
-                    .await;
-                let _ = self
-                    .fund_repo
-                    .set_transfer_status(&group_id, "failed", None)
-                    .await;
+                match self
+                    .compensate_transfer(
+                        user_id,
+                        user_type,
+                        &req.counterparty_budget_id,
+                        &req.budget_id,
+                        &fund.currency,
+                        key,
+                        &group_id,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = self
+                            .fund_repo
+                            .set_transfer_status(&group_id, "failed", None)
+                            .await;
+                    }
+                    Err(ce) => {
+                        // The compensation did not go through: keep the row `requested` so
+                        // `reconcile_stale_fund_transfers` retries the rollback instead of
+                        // losing the debit of the standard budget.
+                        tracing::error!(
+                            "fund deposit compensation failed transfer_id={group_id} idempotency_key={key} err={ce}"
+                        );
+                    }
+                }
                 Err(map_cash_err(e))
             }
         }
@@ -459,29 +492,72 @@ impl PortfolioBiz {
         };
         match entry {
             Ok(e) => {
-                let _ = self
+                let entry_id = e.base.as_ref().map(|b| b.id.clone()).unwrap_or_default();
+                match self
                     .fund_repo
-                    .set_transfer_status(
-                        &group_id,
-                        "completed",
-                        Some(&e.base.as_ref().map(|b| b.id.clone()).unwrap_or_default()),
-                    )
-                    .await;
-                Ok(pb::FundTransferResponse {
-                    movement: Some(map_movement(applied.movement)),
-                    cash_balance: applied.balance_after,
-                    transfer_group_id: group_id,
-                })
+                    .set_transfer_status(&group_id, "completed", Some(&entry_id))
+                    .await
+                {
+                    Ok(true) => Ok(pb::FundTransferResponse {
+                        movement: Some(map_movement(applied.movement)),
+                        cash_balance: applied.balance_after,
+                        transfer_group_id: group_id,
+                    }),
+                    Ok(false) => {
+                        // The reconciler claimed this transfer while we were working, so it owns
+                        // the rollback. Undo our own steps: the money must not stay half moved.
+                        if let Err(ce) = self
+                            .compensate_transfer(
+                                user_id,
+                                user_type,
+                                &req.counterparty_budget_id,
+                                &req.budget_id,
+                                &fund.currency,
+                                key,
+                                &group_id,
+                            )
+                            .await
+                        {
+                            tracing::error!(
+                                "fund withdraw compensation failed transfer_id={group_id} idempotency_key={key} err={ce}"
+                            );
+                        }
+                        Err(Status::aborted(
+                            "transfer was rolled back by reconciliation; please retry",
+                        ))
+                    }
+                    Err(e) => Err(internal(e)),
+                }
             }
             Err(e) => {
                 // Compensate: put the money back in the pocket.
-                let _ = self
-                    .undo_movement(user_id, req, &fund.currency, &group_id)
-                    .await;
-                let _ = self
-                    .fund_repo
-                    .set_transfer_status(&group_id, "failed", None)
-                    .await;
+                match self
+                    .compensate_transfer(
+                        user_id,
+                        user_type,
+                        &req.counterparty_budget_id,
+                        &req.budget_id,
+                        &fund.currency,
+                        key,
+                        &group_id,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = self
+                            .fund_repo
+                            .set_transfer_status(&group_id, "failed", None)
+                            .await;
+                    }
+                    Err(ce) => {
+                        // The compensation did not go through: keep the row `requested` so
+                        // `reconcile_stale_fund_transfers` retries the rollback instead of losing
+                        // the money taken out of the pocket.
+                        tracing::error!(
+                            "fund withdraw compensation failed transfer_id={group_id} idempotency_key={key} err={ce}"
+                        );
+                    }
+                }
                 Err(e)
             }
         }
@@ -569,6 +645,9 @@ impl PortfolioBiz {
                 "requested" => Err(Status::aborted(
                     "this transfer is still being processed; retry shortly",
                 )),
+                "reconciling" => Err(Status::aborted(
+                    "this transfer is being rolled back; retry shortly",
+                )),
                 _ => Err(Status::failed_precondition(
                     "this idempotency_key belongs to a failed transfer; use a new key",
                 )),
@@ -605,50 +684,87 @@ impl PortfolioBiz {
         Ok((id, None))
     }
 
-    async fn void_leg(&self, user_id: &str, user_type: Option<&str>, budget_id: &str, key: &str) {
-        if let Ok(c) = self.entry_client() {
-            let mut c = c.lock().await;
-            if let Err(e) = c
-                .void_transfer_leg(
-                    user_id,
-                    user_type,
-                    VoidTransferLegRequest {
-                        budget_id: budget_id.into(),
-                        idempotency_key: key.into(),
-                    },
-                )
-                .await
-            {
-                if e.code() != tonic::Code::NotFound {
-                    tracing::error!("failed to void entry leg {budget_id}/{key}: {e}");
-                }
-            }
+    /// Voids the entry leg of a transfer.
+    ///
+    /// `Ok(())` means the standard budget is not (or no longer) debited: a missing leg counts as
+    /// already voided. Any other error means the compensation did not happen.
+    async fn void_leg(
+        &self,
+        user_id: &str,
+        user_type: Option<&str>,
+        budget_id: &str,
+        key: &str,
+    ) -> Result<(), Status> {
+        let c = self.entry_client()?;
+        let mut c = c.lock().await;
+        match c
+            .void_transfer_leg(
+                user_id,
+                user_type,
+                VoidTransferLegRequest {
+                    budget_id: budget_id.into(),
+                    idempotency_key: key.into(),
+                },
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) if e.code() == tonic::Code::NotFound => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
-    async fn undo_movement(
+    /// Reverses the local side effects of a transfer: the entry leg (if it exists) and the
+    /// pocket movement (if it exists).
+    ///
+    /// Both steps are idempotent and share stable keys, so the request path and the reconciler
+    /// can both run this without reversing the money twice. The pocket reversal uses the
+    /// mirrored movement kind (`transfer_in` ↔ `transfer_out`) so `net_contributed` stays
+    /// consistent: a compensated transfer cancels out instead of staying counted.
+    #[allow(clippy::too_many_arguments)]
+    async fn compensate_transfer(
         &self,
         user_id: &str,
-        req: &pb::FundTransferRequest,
+        user_type: Option<&str>,
+        std_budget: &str,
+        fund_budget: &str,
         currency: &str,
+        key: &str,
         group_id: &str,
-    ) -> Result<(), FundCashError> {
-        self.fund_repo
-            .apply(&NewFundMovement {
-                budget_id: req.budget_id.clone(),
-                currency: currency.into(),
-                kind: pb::FundCashMovementKind::Adjustment,
-                amount_minor: req.amount_minor,
-                ref_type: Some("portfolio_transfer".into()),
-                ref_id: Some(group_id.into()),
-                transfer_group_id: Some(group_id.into()),
-                idempotency_key: Some(format!("{}:undo", req.idempotency_key)),
-                actor_user_id: user_id.into(),
-                note: Some("rollback of failed withdrawal".into()),
-                occurred_on: req.occurred_on.clone(),
-            })
-            .await
-            .map(|_| ())
+    ) -> Result<(), String> {
+        let mut errors: Vec<String> = Vec::new();
+        if let Err(e) = self.void_leg(user_id, user_type, std_budget, key).await {
+            errors.push(format!("void entry leg: {e}"));
+        }
+        match self.fund_repo.find_movement_by_key(fund_budget, key).await {
+            Ok(Some(m)) if belongs_to(&m, group_id) => {
+                let undo = NewFundMovement {
+                    budget_id: fund_budget.to_string(),
+                    currency: currency.to_string(),
+                    kind: mirror_kind(&m.kind),
+                    amount_minor: -m.amount_minor,
+                    ref_type: Some("portfolio_transfer".into()),
+                    ref_id: m.ref_id.clone(),
+                    transfer_group_id: m.transfer_group_id.clone(),
+                    idempotency_key: Some(compensation_key(key)),
+                    actor_user_id: user_id.to_string(),
+                    note: Some(format!("rollback of transfer {key}")),
+                    occurred_on: m.occurred_on.clone(),
+                };
+                if let Err(e) = self.fund_repo.apply(&undo).await {
+                    errors.push(format!("reverse pocket movement: {e}"));
+                }
+            }
+            // No movement, or a movement of another transfer that reused the key: nothing of
+            // ours to reverse.
+            Ok(_) => {}
+            Err(e) => errors.push(format!("read pocket movement: {e}")),
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -831,6 +947,10 @@ impl PortfolioBiz {
     /// Rolls back fund transfers left in `requested` for more than `older_than_secs`: the entry leg
     /// is voided and any pocket movement reversed, then the transfer is marked failed. Safe to call
     /// repeatedly; every step is idempotent.
+    ///
+    /// A transfer is claimed before any money is touched, so a request that is still in flight (or
+    /// that already completed) can never be rolled back by this sweep: the claim only succeeds
+    /// while the row is still `requested`.
     pub async fn reconcile_stale_fund_transfers(
         &self,
         older_than_secs: i64,
@@ -852,35 +972,52 @@ impl PortfolioBiz {
             if key.is_empty() {
                 continue;
             }
-            self.void_leg(&t.actor_user_id, None, &std_budget, &key)
-                .await;
-            if let Ok(Some(m)) = self
+            // Claim the transfer before touching the money. A transfer that already reached
+            // `completed` cannot be claimed and is never voided here.
+            match self
                 .fund_repo
-                .find_movement_by_key(&fund_budget, &key)
+                .claim_transfer(&t.id)
+                .await
+                .map_err(internal)?
+            {
+                TransferClaim::Lost => continue,
+                // `AlreadyClaimed`: a previous sweep claimed it but never finished — retry the
+                // rollback.
+                TransferClaim::Claimed | TransferClaim::AlreadyClaimed => {}
+            }
+            match self
+                .compensate_transfer(
+                    &t.actor_user_id,
+                    None,
+                    &std_budget,
+                    &fund_budget,
+                    &t.currency,
+                    &key,
+                    &t.group_id,
+                )
                 .await
             {
-                let _ = self
-                    .fund_repo
-                    .apply(&NewFundMovement {
-                        budget_id: fund_budget.clone(),
-                        currency: t.currency.clone(),
-                        kind: pb::FundCashMovementKind::Adjustment,
-                        amount_minor: -m.amount_minor,
-                        ref_type: Some("portfolio_transfer".into()),
-                        ref_id: Some(t.group_id.clone()),
-                        transfer_group_id: Some(t.group_id.clone()),
-                        idempotency_key: Some(format!("{key}:reconcile")),
-                        actor_user_id: t.actor_user_id.clone(),
-                        note: Some("reconcile: stale transfer rolled back".into()),
-                        occurred_on: chrono::Utc::now().format("%Y-%m-%d").to_string(),
-                    })
-                    .await;
+                Ok(()) => {
+                    if self
+                        .fund_repo
+                        .mark_reconciled_failed(&t.id)
+                        .await
+                        .map_err(internal)?
+                    {
+                        rolled_back += 1;
+                    }
+                }
+                Err(e) => {
+                    // The rollback did not go through: keep the row claimed so the next sweep
+                    // retries it. Never mark it failed: the money would be lost.
+                    tracing::error!(
+                        "fund reconcile compensation failed transfer_id={} idempotency_key={} err={}",
+                        t.id,
+                        key,
+                        e
+                    );
+                }
             }
-            let _ = self
-                .fund_repo
-                .set_transfer_status(&t.group_id, "failed", None)
-                .await;
-            rolled_back += 1;
         }
         Ok(rolled_back)
     }
@@ -888,6 +1025,38 @@ impl PortfolioBiz {
 
 fn opt(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
+}
+
+/// The compensating movement of a transfer: `transfer_in` ↔ `transfer_out`.
+///
+/// `net_contributed` counts both kinds, so a mirrored pair cancels out and the ledger stays
+/// honest after a rolled-back transfer. `adjustment` stays reserved for genuinely manual
+/// adjustments.
+fn mirror_kind(db_kind: &str) -> pb::FundCashMovementKind {
+    match db_kind {
+        "transfer_in" => pb::FundCashMovementKind::TransferOut,
+        "transfer_out" => pb::FundCashMovementKind::TransferIn,
+        _ => pb::FundCashMovementKind::Adjustment,
+    }
+}
+
+/// True when the movement belongs to the given transfer group. Guards the compensation against
+/// reversing a movement of another transfer that reused the same idempotency key.
+fn belongs_to(m: &crate::converters::fund::DbFundCashMovement, group_id: &str) -> bool {
+    m.transfer_group_id.as_deref() == Some(group_id) || m.ref_id.as_deref() == Some(group_id)
+}
+
+/// Idempotency key of the compensating movement of a transfer. The suffix is short enough to
+/// stay inside the 64-char column even for the longest accepted request key.
+fn compensation_key(key: &str) -> String {
+    const SUFFIX: &str = ":undo";
+    let room = 64 - SUFFIX.len();
+    if key.chars().count() > room {
+        let head: String = key.chars().take(room).collect();
+        format!("{head}{SUFFIX}")
+    } else {
+        format!("{key}{SUFFIX}")
+    }
 }
 
 fn worse_freshness(a: pb::PriceFreshness, b: pb::PriceFreshness) -> pb::PriceFreshness {
