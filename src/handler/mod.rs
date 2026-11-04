@@ -634,4 +634,5 @@ impl BudgetService for BudgetHandler {
     }
 }
 
+pub mod debt;
 pub mod portfolio;

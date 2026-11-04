@@ -1,14 +1,18 @@
 use axum::{routing::get, Json, Router};
+use budget::handler::debt::DebtHandler;
 use budget::handler::portfolio::PortfolioHandler;
 use budget::handler::BudgetHandler;
+use budget::manager::biz::debt::DebtBiz;
 use budget::manager::biz::portfolio::biz::PortfolioBiz;
 use budget::manager::biz::portfolio::refresh::RefreshJob;
 use budget::manager::biz::BudgetBiz;
 use budget::manager::client::IdentityClient;
+use budget::manager::repository::debt::DebtRepository;
 use budget::manager::repository::fx_rates::FxRateService;
 use budget::manager::repository::portfolio::PortfolioRepository;
 use budget::manager::repository::BudgetRepository;
 use budget::pb::service::budget::budget_service_server::BudgetServiceServer;
+use budget::pb::service::debt::debt_service_server::DebtServiceServer;
 use budget::pb::service::portfolio::portfolio_service_server::PortfolioServiceServer;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -130,6 +134,18 @@ async fn main() -> anyhow::Result<()> {
     );
     let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
 
+    // Debt book (plan 2026-11-04): same pool, entry client for the payment saga.
+    let debt_pool = sqlx::MySqlPool::connect(&config.database_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open debt pool: {e}"))?;
+    let debt_biz = Arc::new(DebtBiz::new(
+        DebtRepository::new(debt_pool),
+        biz.clone(),
+        Some(entry_client()?),
+    ));
+    spawn_debt_reconcile(debt_biz.clone());
+    let debt_handler = DebtHandler::new(debt_biz);
+
     // Reuse the same pool for the scheduled refresh job.
 
     // gRPC server
@@ -137,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
     let grpc_server = tonic::transport::Server::builder()
         .add_service(BudgetServiceServer::new(grpc_handler))
         .add_service(PortfolioServiceServer::new(portfolio_handler))
+        .add_service(DebtServiceServer::new(debt_handler))
         .serve(grpc_addr);
     tracing::info!("gRPC server listening on {}", grpc_addr);
 
@@ -226,6 +243,21 @@ fn spawn_fund_reconcile(biz: Arc<PortfolioBiz>) {
                 Ok(0) => {}
                 Ok(n) => tracing::warn!("fund reconcile rolled back {n} stale transfer(s)"),
                 Err(e) => tracing::error!("fund reconcile failed: {e}"),
+            }
+        }
+    });
+}
+
+/// Rolls back debt payments left half-done by a crash (older than 5 minutes), every 10 minutes.
+fn spawn_debt_reconcile(biz: Arc<DebtBiz>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+        loop {
+            tick.tick().await;
+            match biz.reconcile_stale_payments(300).await {
+                Ok(0) => {}
+                Ok(n) => tracing::warn!("debt reconcile rolled back {n} stale payment(s)"),
+                Err(e) => tracing::error!("debt reconcile failed: {e}"),
             }
         }
     });

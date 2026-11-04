@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let files = [
         format!("{proto_prefix}/budget/budget.proto"),
         format!("{proto_prefix}/portfolio/portfolio.proto"),
+        format!("{proto_prefix}/debt/debt.proto"),
         format!("{proto_prefix}/entry/entry.proto"),
         format!("{proto_prefix}/category/category.proto"),
         format!("{proto_prefix}/identity/identity.proto"),

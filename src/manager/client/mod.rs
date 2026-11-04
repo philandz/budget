@@ -186,6 +186,28 @@ impl EntryClient {
         Ok(self.inner.create_transfer_leg(req).await?.into_inner())
     }
 
+    /// Standard-side legs of one debt payment, written by entry in one transaction.
+    pub async fn create_debt_payment_legs(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: crate::pb::service::entry::CreateDebtPaymentLegsRequest,
+    ) -> Result<crate::pb::service::entry::CreateDebtPaymentLegsResponse, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.create_debt_payment_legs(req).await?.into_inner())
+    }
+
+    /// Compensation for the debt saga (idempotent).
+    pub async fn void_debt_payment_legs(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: crate::pb::service::entry::VoidDebtPaymentLegsRequest,
+    ) -> Result<crate::pb::service::entry::VoidDebtPaymentLegsResponse, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.void_debt_payment_legs(req).await?.into_inner())
+    }
+
     pub async fn void_transfer_leg(
         &mut self,
         user_id: &str,

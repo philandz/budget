@@ -12,6 +12,9 @@ pub mod pb {
         pub mod portfolio {
             tonic::include_proto!("service.portfolio");
         }
+        pub mod debt {
+            tonic::include_proto!("service.debt");
+        }
         pub mod entry {
             tonic::include_proto!("service.entry");
         }

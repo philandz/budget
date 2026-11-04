@@ -347,6 +347,33 @@ message VoidTransferLegRequest {
   string idempotency_key = 2;
 }
 
+// Internal (budget-service debt saga): the Standard-side legs of one debt payment, written in ONE
+// database transaction. `principal_minor` becomes a TRANSFER_OUT (counterparty = the debt budget),
+// `interest_fee_minor` an EXPENSE in `category_id`. A zero amount skips its leg. Idempotent on
+// `group_id`: a replay returns the legs that already exist.
+message CreateDebtPaymentLegsRequest {
+  string group_id          = 1;
+  string from_budget_id    = 2;
+  string debt_budget_id    = 3;
+  int64  principal_minor   = 4;
+  int64  interest_fee_minor = 5;
+  string category_id       = 6;
+  string entry_date        = 7;
+  string description       = 8;
+  string actor_user_id     = 9;
+}
+message CreateDebtPaymentLegsResponse {
+  string group_id          = 1;
+  string principal_entry_id = 2;
+  string cost_entry_id     = 3;
+  bool   replayed          = 4;
+}
+message VoidDebtPaymentLegsRequest {
+  string group_id       = 1;
+  string from_budget_id = 2;
+}
+message VoidDebtPaymentLegsResponse { int32 voided = 1; }
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -357,6 +384,9 @@ service EntryService {
   // Internal transfer legs for the budget-service saga (no HTTP route)
   rpc CreateTransferLeg(CreateTransferLegRequest) returns (Entry);
   rpc VoidTransferLeg(VoidTransferLegRequest) returns (Entry);
+  // Internal debt payment legs for the budget-service debt saga (no HTTP route)
+  rpc CreateDebtPaymentLegs(CreateDebtPaymentLegsRequest) returns (CreateDebtPaymentLegsResponse);
+  rpc VoidDebtPaymentLegs(VoidDebtPaymentLegsRequest) returns (VoidDebtPaymentLegsResponse);
 
   // Transfers between budgets
   rpc CreateTransfer(CreateTransferRequest) returns (Transfer) {

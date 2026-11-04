@@ -13,6 +13,7 @@ use crate::pb::service::budget::{
 };
 use crate::pb::shared::organization::OrgRole;
 
+pub mod debt;
 pub mod envelope;
 
 pub mod portfolio;
