@@ -116,6 +116,12 @@ pub struct Quote {
     pub suggested_fee: i64,
     pub allowance_used: i64,
     pub allowance_remaining: i64,
+    pub allowance_before: i64,
+    pub taxable: i64,
+    pub has_rule: bool,
+    pub fee_pct_1e4: i64,
+    pub before: Option<sch::Schedule>,
+    pub outcomes: Vec<(&'static str, sch::Schedule)>,
     pub due_date: Option<NaiveDate>,
     pub interest_from: NaiveDate,
     pub interest_to: NaiveDate,
@@ -279,6 +285,12 @@ impl DebtBiz {
             suggested_fee: 0,
             allowance_used: prepaid,
             allowance_remaining: 0,
+            allowance_before: 0,
+            taxable: 0,
+            has_rule: false,
+            fee_pct_1e4: 0,
+            before: None,
+            outcomes: Vec::new(),
             due_date: None,
             interest_from: inp.interest_through,
             interest_to: paid_on,
@@ -333,6 +345,29 @@ impl DebtBiz {
                     } else {
                         0
                     };
+                    q.taxable = fee.taxable;
+                    if kind == "prepayment" && principal < outstanding {
+                        let method = inp.method;
+                        let before = sch::project(&inp);
+                        let keep = a
+                            .installment_minor
+                            .filter(|v| *v > 0)
+                            .or_else(|| sch::current_installment(method, &before.rows));
+                        let mut after = inp.clone();
+                        after.outstanding = outstanding - principal;
+                        if acc.interest > 0 && paid_on > inp.interest_through {
+                            after.interest_through = paid_on;
+                        }
+                        let mut term = after.clone();
+                        term.fixed_installment = keep;
+                        let mut inst = after;
+                        inst.fixed_installment = None;
+                        q.outcomes = vec![
+                            ("reduce_term", sch::project(&term)),
+                            ("reduce_installment", sch::project(&inst)),
+                        ];
+                        q.before = Some(before);
+                    }
                 } else if let Some(rule) = sch::rule_on(&l.rules, paid_on) {
                     q.allowance_remaining = (rule.free_allowance_per_month - prepaid).max(0);
                 }
@@ -343,9 +378,12 @@ impl DebtBiz {
                 ))
             }
         }
-        if kind == "scheduled" {
-            if let Some(rule) = sch::rule_on(&l.rules, paid_on) {
-                q.allowance_remaining = (rule.free_allowance_per_month - prepaid).max(0);
+        if let Some(rule) = sch::rule_on(&l.rules, paid_on) {
+            q.has_rule = true;
+            q.fee_pct_1e4 = rule.fee_pct_1e4;
+            q.allowance_before = (rule.free_allowance_per_month - prepaid).max(0);
+            if kind == "scheduled" {
+                q.allowance_remaining = q.allowance_before;
             }
         }
         Ok(q)
@@ -1034,6 +1072,32 @@ impl DebtBiz {
             annual_rate: sch::fmt_pct(q.micro_pct),
             outstanding_after_minor: l.acc.outstanding_minor - q.principal,
             estimated: q.estimated,
+            allowance_before_minor: q.allowance_before,
+            taxable_minor: q.taxable,
+            has_rule: q.has_rule,
+            fee_pct: if q.has_rule {
+                sch::fmt_pct(q.fee_pct_1e4 * 100)
+            } else {
+                String::new()
+            },
+            payoff_date_before: q
+                .before
+                .as_ref()
+                .and_then(|b| b.payoff_date)
+                .map(sch::fmt_date)
+                .unwrap_or_default(),
+            total_interest_before_minor: q.before.as_ref().map(|b| b.total_interest).unwrap_or(0),
+            outcomes: q
+                .outcomes
+                .iter()
+                .map(|(effect, s)| pb::PrepayOutcome {
+                    effect: effect.to_string(),
+                    payoff_date: s.payoff_date.map(sch::fmt_date).unwrap_or_default(),
+                    installment_minor: s.rows.first().map(|r| r.total).unwrap_or(0),
+                    total_interest_minor: s.total_interest,
+                    periods: s.rows.len() as i32,
+                })
+                .collect(),
         })
     }
 
@@ -1255,6 +1319,28 @@ impl DebtBiz {
         // 3. Debt side.
         match self.repo.apply_payment(&payment.id, &effect).await {
             Ok(acc) => {
+                // Remember the category chosen for interest + fee: the next payment pre-selects it.
+                if let Some(c) = category.as_ref() {
+                    if l.acc.interest_category_id.as_deref() != Some(c.as_str()) {
+                        let patch = AccountPatch {
+                            interest_category_id: Some(c.clone()),
+                            ..Default::default()
+                        };
+                        let mut changed = serde_json::Map::new();
+                        changed.insert("interest_category_id".into(), c.clone().into());
+                        let _ = self
+                            .repo
+                            .update_account(
+                                &req.account_id,
+                                &patch,
+                                0,
+                                user_id,
+                                &sch::fmt_date(paid_on),
+                                serde_json::Value::Object(changed).to_string(),
+                            )
+                            .await;
+                    }
+                }
                 let done = self
                     .repo
                     .get_payment(&payment.id)

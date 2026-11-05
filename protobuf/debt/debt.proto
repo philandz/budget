@@ -184,6 +184,21 @@ message QuotePaymentResponse {
   string annual_rate               = 12;
   int64  outstanding_after_minor   = 13;
   bool   estimated                 = 14;
+  int64  allowance_before_minor    = 15;  // free prepayment allowance left before this payment
+  int64  taxable_minor             = 16;  // part of the prepayment above the allowance (charged fee_pct)
+  bool   has_rule                  = 17;  // a prepayment rule is in force on paid_on
+  string fee_pct                   = 18;  // of that rule, e.g. "3"
+  // Prepayment only: the projected schedule now and after each prepay effect (an estimate).
+  string payoff_date_before          = 19;
+  int64  total_interest_before_minor = 20;
+  repeated PrepayOutcome outcomes    = 21;
+}
+message PrepayOutcome {
+  string effect               = 1;  // reduce_term | reduce_installment
+  string payoff_date          = 2;
+  int64  installment_minor    = 3;  // next instalment after the prepayment
+  int64  total_interest_minor = 4;  // projected interest still to pay
+  int32  periods              = 5;
 }
 
 message RecordPaymentRequest {
