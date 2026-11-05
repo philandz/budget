@@ -106,3 +106,157 @@ impl IdentityClient {
             .collect())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Entry service client (fund transfers: the standard-budget leg lives in `entries`)
+// ---------------------------------------------------------------------------
+
+use crate::pb::service::entry::entry_service_client::EntryServiceClient;
+use crate::pb::service::entry::{CreateTransferLegRequest, Entry, VoidTransferLegRequest};
+
+pub struct EntryClient {
+    inner: EntryServiceClient<Channel>,
+}
+
+impl EntryClient {
+    /// Lazy so the budget and entry services (which call each other) can start in any order.
+    pub fn connect_lazy(url: &str) -> anyhow::Result<Self> {
+        let channel = Channel::from_shared(url.to_string())
+            .map_err(|e| anyhow::anyhow!("invalid entry gRPC URL: {e}"))?
+            .connect_lazy();
+        Ok(Self {
+            inner: EntryServiceClient::new(channel),
+        })
+    }
+
+    fn with_caller<T>(
+        msg: T,
+        user_id: &str,
+        user_type: Option<&str>,
+    ) -> Result<tonic::Request<T>, Status> {
+        let mut req = tonic::Request::new(msg);
+        let uid = tonic::metadata::MetadataValue::try_from(user_id)
+            .map_err(|_| Status::invalid_argument("invalid user id"))?;
+        req.metadata_mut().insert("x-user-id", uid);
+        if let Some(ut) = user_type {
+            if let Ok(v) = tonic::metadata::MetadataValue::try_from(ut) {
+                req.metadata_mut().insert("x-user-type", v);
+            }
+        }
+        Ok(req)
+    }
+
+    /// Expense totals per budget in `[date_from, date_to)`. Transfers are excluded by the entry service.
+    pub async fn expense_by_budget(
+        &mut self,
+        user_id: &str,
+        budget_ids: Vec<String>,
+        date_from: &str,
+        date_to: &str,
+    ) -> Result<std::collections::HashMap<String, i64>, Status> {
+        use crate::pb::service::entry::PeriodTotalsRequest;
+        let mut out = std::collections::HashMap::new();
+        // Entry caps a request at 200 budgets.
+        for chunk in budget_ids.chunks(200) {
+            let req = Self::with_caller(
+                PeriodTotalsRequest {
+                    budget_ids: chunk.to_vec(),
+                    date_from: date_from.to_string(),
+                    date_to: date_to.to_string(),
+                    group_by_category: false,
+                    group_by_day: false,
+                },
+                user_id,
+                None,
+            )?;
+            for row in self.inner.get_period_totals(req).await?.into_inner().rows {
+                *out.entry(row.budget_id).or_insert(0) += row.expense;
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn create_transfer_leg(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: CreateTransferLegRequest,
+    ) -> Result<Entry, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.create_transfer_leg(req).await?.into_inner())
+    }
+
+    /// Standard-side legs of one debt payment, written by entry in one transaction.
+    pub async fn create_debt_payment_legs(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: crate::pb::service::entry::CreateDebtPaymentLegsRequest,
+    ) -> Result<crate::pb::service::entry::CreateDebtPaymentLegsResponse, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.create_debt_payment_legs(req).await?.into_inner())
+    }
+
+    /// Compensation for the debt saga (idempotent).
+    pub async fn void_debt_payment_legs(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: crate::pb::service::entry::VoidDebtPaymentLegsRequest,
+    ) -> Result<crate::pb::service::entry::VoidDebtPaymentLegsResponse, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.void_debt_payment_legs(req).await?.into_inner())
+    }
+
+    pub async fn void_transfer_leg(
+        &mut self,
+        user_id: &str,
+        user_type: Option<&str>,
+        msg: VoidTransferLegRequest,
+    ) -> Result<Entry, Status> {
+        let req = Self::with_caller(msg, user_id, user_type)?;
+        Ok(self.inner.void_transfer_leg(req).await?.into_inner())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Category service client (seeding default categories for new budgets)
+// ---------------------------------------------------------------------------
+
+use crate::pb::service::category::category_service_client::CategoryServiceClient;
+use crate::pb::service::category::{
+    SeedCategoriesRequest, SeedCategoriesResponse, SeedCategoryItem,
+};
+
+pub struct CategoryClient {
+    inner: CategoryServiceClient<Channel>,
+}
+
+impl CategoryClient {
+    /// Lazy: category calls budget for roles and budget calls category to seed, so neither
+    /// may require the other to be up at start-up.
+    pub fn connect_lazy(url: &str) -> anyhow::Result<Self> {
+        let channel = Channel::from_shared(url.to_string())
+            .map_err(|e| anyhow::anyhow!("invalid category gRPC URL: {e}"))?
+            .connect_lazy();
+        Ok(Self {
+            inner: CategoryServiceClient::new(channel),
+        })
+    }
+
+    pub async fn seed_categories(
+        &mut self,
+        user_id: &str,
+        budget_id: &str,
+        items: Vec<SeedCategoryItem>,
+    ) -> Result<SeedCategoriesResponse, Status> {
+        let mut req = tonic::Request::new(SeedCategoriesRequest {
+            budget_id: budget_id.to_string(),
+            items,
+        });
+        let uid = tonic::metadata::MetadataValue::try_from(user_id)
+            .map_err(|_| Status::invalid_argument("invalid user id"))?;
+        req.metadata_mut().insert("x-user-id", uid);
+        Ok(self.inner.seed_categories(req).await?.into_inner())
+    }
+}

@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use tonic::Status;
 
 use crate::converters::{map_budget, map_budget_member, map_budget_member_with, DbTemplate};
-use crate::manager::client::{self, IdentityClient};
+use crate::manager::client::{self, CategoryClient, IdentityClient};
 use crate::manager::repository::BudgetRepository;
 use crate::pb::service::budget::{
     Budget, BudgetMember, BudgetRole, BudgetTemplate, BudgetType, EnvelopeLimit, ListBudgetParams,
@@ -13,12 +13,18 @@ use crate::pb::service::budget::{
 };
 use crate::pb::shared::organization::OrgRole;
 
+pub mod debt;
+pub mod envelope;
+
 pub mod portfolio;
+pub mod seed;
 
 pub struct BudgetBiz {
     pub repo: Arc<BudgetRepository>,
     pub config: BudgetServiceConfig,
     pub identity_client: Arc<Mutex<IdentityClient>>,
+    pub category_client: Option<Arc<Mutex<CategoryClient>>>,
+    entry_client: Option<Arc<Mutex<crate::manager::client::EntryClient>>>,
 }
 
 impl BudgetBiz {
@@ -31,6 +37,118 @@ impl BudgetBiz {
             repo: Arc::new(repo),
             config,
             identity_client: Arc::new(Mutex::new(identity_client)),
+            category_client: None,
+            entry_client: None,
+        }
+    }
+
+    /// Lets budget reads fill `current_spend` from the Entry service (no direct reads of `entries`).
+    pub fn with_entry_client(mut self, client: crate::manager::client::EntryClient) -> Self {
+        self.entry_client = Some(Arc::new(Mutex::new(client)));
+        self
+    }
+
+    /// Fills `current_spend` (expenses in the budget's current period) for the given rows.
+    ///
+    /// The window follows each budget's OWN period settings (`period_start_day` +
+    /// `timezone`) — the same period the burn rate uses — so the list, the
+    /// detail view and the burn rate never disagree. Budgets are grouped by
+    /// their period settings because `GetPeriodTotals` takes one window for the
+    /// whole request.
+    ///
+    /// Errors are propagated on purpose: reporting `current_spend = 0` when the
+    /// Entry service is unreachable would render over-budget budgets as "OK".
+    async fn fill_spend(
+        &self,
+        caller: &str,
+        rows: &mut [crate::converters::DbBudget],
+    ) -> Result<(), Status> {
+        let Some(client) = &self.entry_client else {
+            return Ok(());
+        };
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now();
+
+        // One window per distinct period setting.
+        let mut groups: std::collections::HashMap<(u8, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for r in rows.iter() {
+            let start_day = r.period_start_day.unwrap_or(1).clamp(1, 28) as u8;
+            let tz = r
+                .timezone
+                .clone()
+                .unwrap_or_else(|| crate::manager::validate::DEFAULT_TIMEZONE.to_string());
+            groups
+                .entry((start_day, tz))
+                .or_default()
+                .push(r.id.clone());
+        }
+
+        let mut spend: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        for ((start_day, tz), ids) in groups {
+            let (from, to) = envelope::current_period(now, start_day, &tz);
+            let map = client
+                .lock()
+                .await
+                .expense_by_budget(
+                    caller,
+                    ids,
+                    &from.format("%Y-%m-%d").to_string(),
+                    &to.format("%Y-%m-%d").to_string(),
+                )
+                .await?;
+            spend.extend(map);
+        }
+
+        for r in rows.iter_mut() {
+            r.current_spend = Some(spend.get(&r.id).copied().unwrap_or(0));
+        }
+        Ok(())
+    }
+
+    /// Enables seeding default categories on budget creation.
+    pub fn with_category_client(mut self, client: CategoryClient) -> Self {
+        self.category_client = Some(Arc::new(Mutex::new(client)));
+        self
+    }
+
+    /// Seeds template/default categories for a freshly created budget. Best effort: a failure
+    /// is logged and the budget is kept, so the user can retry from an empty state in the UI.
+    pub async fn seed_new_budget(
+        &self,
+        user_id: &str,
+        budget: &Budget,
+        template_id: Option<&str>,
+        locale: &str,
+        expected_income: i64,
+    ) {
+        let Some(client) = &self.category_client else {
+            return;
+        };
+        let budget_id = budget
+            .base
+            .as_ref()
+            .map(|b| b.id.clone())
+            .unwrap_or_default();
+        let budget_type = BudgetType::try_from(budget.budget_type).unwrap_or(BudgetType::Standard);
+        let items = seed::seed_items(
+            template_id,
+            budget_type,
+            seed::Locale::parse(locale),
+            expected_income,
+        );
+        if items.is_empty() {
+            return;
+        }
+        if let Err(e) = client
+            .lock()
+            .await
+            .seed_categories(user_id, &budget_id, items)
+            .await
+        {
+            tracing::warn!(%budget_id, error = %e, "seeding default categories failed");
         }
     }
 
@@ -46,6 +164,8 @@ impl BudgetBiz {
             repo,
             config: philand_configs::BudgetServiceConfig::default_for_tests(),
             identity_client: Arc::new(Mutex::new(IdentityClient::test_only_unreachable())),
+            category_client: None,
+            entry_client: None,
         }
     }
 
@@ -77,12 +197,66 @@ impl BudgetBiz {
         currency: &str,
         _template_id: Option<&str>,
     ) -> Result<Budget, Status> {
+        let currency = crate::manager::validate::sharing_currency(budget_type, currency)?;
         let db = self
             .repo
-            .create_budget(org_id, name, budget_type, currency, user_id)
+            .create_budget(org_id, name, budget_type, &currency, user_id)
             .await
             .map_err(Self::internal)?;
         Ok(map_budget(db))
+    }
+
+    /// Archive / reopen a sharing budget. Owner or Manager only.
+    pub async fn set_budget_status(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        status: &str,
+    ) -> Result<Budget, Status> {
+        let status = crate::manager::validate::settable_status(status)?;
+        let (role, is_member) = self.check_role(user_id, budget_id, None).await?;
+        if !is_member || !matches!(role, BudgetRole::Owner | BudgetRole::Manager) {
+            return Err(Status::permission_denied(
+                "Only an owner or manager can archive or reopen a budget",
+            ));
+        }
+        let db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        if crate::converters::budget_type_from_db(&db.budget_type) != BudgetType::Sharing {
+            return Err(Status::failed_precondition(
+                "Only sharing budgets can be archived",
+            ));
+        }
+        if db.status != "active" && db.status != "archived" {
+            return Err(Status::failed_precondition("Budget is not open"));
+        }
+        self.repo
+            .set_budget_status(budget_id, status)
+            .await
+            .map_err(Self::internal)?;
+        self.get_budget_admin(budget_id).await
+    }
+
+    /// Applies validated period settings to a budget and returns the refreshed budget.
+    pub async fn apply_period(
+        &self,
+        user_id: &str,
+        budget_id: &str,
+        start_day: Option<i32>,
+        timezone: Option<&str>,
+    ) -> Result<(), Status> {
+        let (day, tz) = crate::manager::validate::period_settings(start_day, timezone)?;
+        if day.is_none() && tz.is_none() {
+            return Ok(());
+        }
+        let _ = user_id;
+        self.repo
+            .set_budget_period(budget_id, day, tz.as_deref())
+            .await
+            .map_err(Self::internal)
     }
 
     pub async fn get_budget(
@@ -102,21 +276,44 @@ impl BudgetBiz {
             BudgetRole::Viewer => "viewer",
             BudgetRole::Unspecified => "",
         };
-        let db = self
+        let mut db = self
             .repo
             .get_budget_for_user(budget_id, user_id, Some(role_label))
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
+        self.fill_spend(user_id, std::slice::from_mut(&mut db))
+            .await?;
         Ok(map_budget(db))
     }
 
     pub async fn get_budget_admin(&self, budget_id: &str) -> Result<Budget, Status> {
+        let mut db = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        self.fill_spend("system", std::slice::from_mut(&mut db))
+            .await?;
+        Ok(map_budget(db))
+    }
+
+    /// Reads only the status and type of a budget.
+    ///
+    /// This backs the internal `GetBudgetStatus` RPC that the sharing service
+    /// calls to guard writes on archived budgets. It deliberately does NOT
+    /// compute `current_spend`: that would make every write depend on the
+    /// Entry service being up, and a slow Entry would block writes to budgets
+    /// that are perfectly writable.
+    pub async fn get_budget_status(&self, budget_id: &str) -> Result<(String, BudgetType), Status> {
         let db = self
             .repo
             .get_budget_by_id(budget_id)
             .await
             .map_err(|_| Status::not_found("Budget not found"))?;
-        Ok(map_budget(db))
+        Ok((
+            db.status,
+            crate::converters::budget_type_from_db(&db.budget_type),
+        ))
     }
 
     pub async fn list_members_admin(
@@ -174,6 +371,15 @@ impl BudgetBiz {
     ) -> Result<Budget, Status> {
         self.assert_min_role(budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
+        let current = self
+            .repo
+            .get_budget_by_id(budget_id)
+            .await
+            .map_err(|_| Status::not_found("Budget not found"))?;
+        let budget_type = crate::manager::validate::resolve_budget_type(
+            crate::converters::budget_type_from_db(&current.budget_type),
+            budget_type,
+        )?;
         let db = self
             .repo
             .update_budget(budget_id, name, budget_type, is_private, user_id)
@@ -217,11 +423,12 @@ impl BudgetBiz {
     }
 
     pub async fn list_budgets(&self, user_id: &str, org_id: &str) -> Result<Vec<Budget>, Status> {
-        let rows = self
+        let mut rows = self
             .repo
             .list_budgets_for_user(org_id, user_id)
             .await
             .map_err(Self::internal)?;
+        self.fill_spend(user_id, &mut rows).await?;
         Ok(rows.into_iter().map(map_budget).collect())
     }
 
@@ -250,7 +457,7 @@ impl BudgetBiz {
                 .filter(|&br| br != BudgetRole::Unspecified)
         });
 
-        let (rows, total) = self
+        let (mut rows, total) = self
             .repo
             .list_budgets_paged(
                 org_id,
@@ -265,6 +472,8 @@ impl BudgetBiz {
             )
             .await
             .map_err(Self::internal)?;
+
+        self.fill_spend(user_id, &mut rows).await?;
 
         let total_pages = if total == 0 {
             0
@@ -295,11 +504,12 @@ impl BudgetBiz {
         // We trust the x-user-id header from gateway.
         let _ = caller_id; // unused, gateway already verified
 
-        let (rows, total) = self
+        let (mut rows, total) = self
             .repo
             .list_budgets_admin(org_id, budget_type, name_search, page, page_size)
             .await
             .map_err(Self::internal)?;
+        self.fill_spend(caller_id, &mut rows).await?;
         Ok((rows.into_iter().map(map_budget).collect(), total))
     }
 
@@ -551,29 +761,43 @@ impl BudgetBiz {
         budget_id: &str,
         monthly_limit: i64,
     ) -> Result<EnvelopeLimit, Status> {
-        // `entries` lives in the entry-service DB; budget's DB does not have
-        // it. If the query errors (table missing, etc.), degrade to 0 spend
-        // rather than failing the whole burn-rate request.
-        let current_spend = self
-            .repo
-            .get_current_month_spend(budget_id)
-            .await
-            .map_err(Self::internal)
-            .unwrap_or(0);
-
-        let burn_rate_pct = if monthly_limit > 0 {
-            let now = chrono::Utc::now();
-            let (year, month, day) = (
-                now.format("%Y").to_string().parse::<i32>().unwrap_or(2026),
-                now.format("%m").to_string().parse::<i32>().unwrap_or(1),
-                now.format("%d").to_string().parse::<f64>().unwrap_or(1.0),
-            );
-            let days_in_month = days_in_month(year, month) as f64;
-            let projected = (current_spend as f64 / day) * days_in_month;
-            (projected / monthly_limit as f64) * 100.0
-        } else {
-            0.0
+        // Follow the budget's own period (start day + timezone). Spend comes from the Entry service;
+        // if that fails, degrade to 0 spend rather than failing the request.
+        let now = chrono::Utc::now();
+        let (start_day, tz) = match self.repo.get_budget_by_id(budget_id).await {
+            Ok(b) => (
+                b.period_start_day.unwrap_or(1).clamp(1, 28) as u8,
+                b.timezone
+                    .unwrap_or_else(|| crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
+            ),
+            Err(_) => (1, crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
         };
+        let period = envelope::current_period(now, start_day, &tz);
+        let current_spend = match &self.entry_client {
+            Some(client) => client
+                .lock()
+                .await
+                .expense_by_budget(
+                    "system",
+                    vec![budget_id.to_string()],
+                    &philand_time::period::ymd(period.0),
+                    &philand_time::period::ymd(period.1),
+                )
+                .await
+                .map(|m| m.get(budget_id).copied().unwrap_or(0))
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "entry spend lookup failed; using 0");
+                    0
+                }),
+            None => 0,
+        };
+
+        let burn_rate_pct = envelope::burn_rate_pct(
+            current_spend,
+            monthly_limit,
+            envelope::local_today(now, &tz),
+            period,
+        );
 
         Ok(EnvelopeLimit {
             budget_id: budget_id.to_string(),
@@ -980,20 +1204,5 @@ impl BudgetBiz {
             }
             _ => Ok((0, 0, 0, 0.0, String::new())),
         }
-    }
-}
-
-fn days_in_month(year: i32, month: i32) -> i32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 30,
     }
 }

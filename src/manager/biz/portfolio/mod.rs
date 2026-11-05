@@ -7,15 +7,18 @@
 
 pub mod biz;
 pub mod fifo;
+pub mod fund;
 pub mod gold;
 pub mod interest;
 pub mod lifecycle;
 pub mod maturity;
 pub mod money;
 pub mod outbox;
+pub mod policy;
 pub mod providers;
 pub mod quantity;
 pub mod rate;
+pub mod redemption;
 pub mod refresh;
 pub mod rollover;
 pub mod snapshot;

@@ -9,6 +9,8 @@ use crate::converters::{
 };
 use crate::pb::service::budget::{BudgetRole, BudgetType, RolloverPolicy};
 
+pub mod debt;
+pub mod fund_cash;
 pub mod fx_rates;
 pub mod portfolio;
 
@@ -120,11 +122,6 @@ impl BudgetRepository {
         user_id: &str,
         override_role: Option<&str>,
     ) -> Result<DbBudget> {
-        let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string();
-        let month = now.format("%m").to_string();
-        let start_of_month = format!("{year}-{month}-01");
-
         let fallback_role = override_role.unwrap_or("");
         let row = sqlx::query_as::<_, DbBudget>(
             r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
@@ -132,8 +129,8 @@ impl BudgetRepository {
                     CASE WHEN bm.role IS NOT NULL THEN bm.role ELSE ? END AS my_role,
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
-                    COALESCE(cs.current_spend, 0) AS current_spend,
-                    b.is_private,
+                    0 AS current_spend,
+                    b.is_private, b.period_start_day, b.timezone,
                     0 AS asset_count,
                     0 AS total_current_value,
                     0 AS total_cost_basis
@@ -145,21 +142,10 @@ impl BudgetRepository {
                    FROM budget_members
                    GROUP BY budget_id
                ) mc ON mc.budget_id = BINARY b.id
-               LEFT JOIN (
-                   SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
-                   FROM entries
-                   WHERE kind = 'expense'
-                     AND entry_date >= ?
-                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-                     AND deleted_at IS NULL
-                   GROUP BY budget_id
-               ) cs ON cs.budget_id = BINARY b.id
                WHERE BINARY b.id = BINARY ? AND b.deleted_at IS NULL"#,
         )
         .bind(fallback_role)
         .bind(user_id)
-        .bind(&start_of_month)
-        .bind(&start_of_month)
         .bind(budget_id)
         .fetch_one(&self.pool)
         .await?;
@@ -167,19 +153,14 @@ impl BudgetRepository {
     }
 
     pub async fn get_budget_by_id(&self, budget_id: &str) -> Result<DbBudget> {
-        let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string();
-        let month = now.format("%m").to_string();
-        let start_of_month = format!("{year}-{month:02}-01");
-
         let row = sqlx::query_as::<_, DbBudget>(
             r#"SELECT b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
                     b.created_by, b.created_at, b.updated_at, b.deleted_at,
                     '' AS my_role,
                     el.monthly_limit AS envelope_limit,
                     COALESCE(mc.member_count, 0) AS member_count,
-                    COALESCE(cs.current_spend, 0) AS current_spend,
-                    b.is_private
+                    0 AS current_spend,
+                    b.is_private, b.period_start_day, b.timezone
                FROM budgets b
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
                LEFT JOIN (
@@ -187,19 +168,8 @@ impl BudgetRepository {
                    FROM budget_members
                    GROUP BY budget_id
                ) mc ON mc.budget_id = BINARY b.id
-               LEFT JOIN (
-                   SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
-                   FROM entries
-                   WHERE kind = 'expense'
-                     AND entry_date >= ?
-                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-                     AND deleted_at IS NULL
-                   GROUP BY budget_id
-               ) cs ON cs.budget_id = BINARY b.id
                WHERE BINARY b.id = BINARY ? AND b.deleted_at IS NULL"#,
         )
-        .bind(&start_of_month)
-        .bind(&start_of_month)
         .bind(budget_id)
         .fetch_one(&self.pool)
         .await?;
@@ -223,6 +193,27 @@ impl BudgetRepository {
         .execute(&self.pool)
         .await?;
         self.get_budget_for_user(budget_id, updated_by, None).await
+    }
+
+    /// Updates only the provided period settings; `None` keeps the stored value.
+    pub async fn set_budget_period(
+        &self,
+        budget_id: &str,
+        start_day: Option<u8>,
+        timezone: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE budgets SET period_start_day = COALESCE(?, period_start_day),
+                    timezone = COALESCE(?, timezone), updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(start_day.map(|d| d as i32))
+        .bind(timezone)
+        .bind(now_unix())
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn delete_budget(&self, budget_id: &str) -> Result<()> {
@@ -328,6 +319,20 @@ impl BudgetRepository {
         Ok(())
     }
 
+    /// Sets 'active' <-> 'archived' on a live (non-deleted, non-closed) budget.
+    pub async fn set_budget_status(&self, budget_id: &str, status: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE budgets SET status = ?, updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL AND status IN ('active','archived')",
+        )
+        .bind(status)
+        .bind(now_unix())
+        .bind(budget_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn force_close_budget(&self, budget_id: &str) -> Result<()> {
         let now = now_unix();
         sqlx::query("UPDATE budgets SET status = 'closed', updated_at = ? WHERE id = ? AND deleted_at IS NULL")
@@ -341,11 +346,6 @@ impl BudgetRepository {
         org_id: &str,
         user_id: &str,
     ) -> Result<Vec<DbBudget>> {
-        let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string();
-        let month = now.format("%m").to_string();
-        let start_of_month = format!("{year}-{month:02}-01");
-
         let rows = sqlx::query_as::<_, DbBudget>(
             r#"SELECT
                   b.id, b.org_id, b.name, b.budget_type, b.currency, b.status,
@@ -353,8 +353,8 @@ impl BudgetRepository {
                   bm.role AS my_role,
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
-                  COALESCE(cs.current_spend, 0) AS current_spend,
-                  b.is_private
+                  0 AS current_spend,
+                  b.is_private, b.period_start_day, b.timezone
                FROM budgets b
                INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -363,21 +363,10 @@ impl BudgetRepository {
                    FROM budget_members
                    GROUP BY budget_id
                ) mc ON mc.budget_id = BINARY b.id
-               LEFT JOIN (
-                   SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
-                   FROM entries
-                   WHERE kind = 'expense'
-                     AND entry_date >= ?
-                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-                     AND deleted_at IS NULL
-                   GROUP BY budget_id
-               ) cs ON cs.budget_id = BINARY b.id
                WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL
                ORDER BY b.created_at ASC"#,
         )
         .bind(user_id)
-        .bind(&start_of_month)
-        .bind(&start_of_month)
         .bind(org_id)
         .fetch_all(&self.pool)
         .await?;
@@ -398,11 +387,6 @@ impl BudgetRepository {
         page: i32,
         page_size: i32,
     ) -> Result<(Vec<DbBudget>, i64)> {
-        let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string();
-        let month = now.format("%m").to_string();
-        let start_of_month = format!("{year}-{month:02}-01");
-
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
         let offset = (page - 1) * page_size;
@@ -479,8 +463,8 @@ impl BudgetRepository {
                       bm.role AS my_role,
                       el.monthly_limit AS envelope_limit,
                       COALESCE(mc.member_count, 0) AS member_count,
-                      COALESCE(cs.current_spend, 0) AS current_spend,
-                      b.is_private
+                      0 AS current_spend,
+                      b.is_private, b.period_start_day, b.timezone
                    FROM budgets b
                    INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ? AND bm.role = ?
                    LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -489,15 +473,6 @@ impl BudgetRepository {
                        FROM budget_members
                        GROUP BY budget_id
                    ) mc ON mc.budget_id = BINARY b.id
-                   LEFT JOIN (
-                       SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
-                       FROM entries
-                       WHERE kind = 'expense'
-                         AND entry_date >= ?
-                         AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-                         AND deleted_at IS NULL
-                       GROUP BY budget_id
-                   ) cs ON cs.budget_id = BINARY b.id
                    WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
                 .to_string();
             if has_search {
@@ -517,8 +492,8 @@ impl BudgetRepository {
                       bm.role AS my_role,
                       el.monthly_limit AS envelope_limit,
                       COALESCE(mc.member_count, 0) AS member_count,
-                      COALESCE(cs.current_spend, 0) AS current_spend,
-                      b.is_private
+                      0 AS current_spend,
+                      b.is_private, b.period_start_day, b.timezone
                    FROM budgets b
                    INNER JOIN budget_members bm ON bm.budget_id = BINARY b.id AND bm.user_id = BINARY ?
                    LEFT JOIN budget_envelope_limits el ON el.budget_id = BINARY b.id
@@ -527,15 +502,6 @@ impl BudgetRepository {
                        FROM budget_members
                        GROUP BY budget_id
                    ) mc ON mc.budget_id = BINARY b.id
-                   LEFT JOIN (
-                       SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
-                       FROM entries
-                       WHERE kind = 'expense'
-                         AND entry_date >= ?
-                         AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-                         AND deleted_at IS NULL
-                       GROUP BY budget_id
-                   ) cs ON cs.budget_id = BINARY b.id
                    WHERE BINARY b.org_id = BINARY ? AND b.deleted_at IS NULL"#
                 .to_string();
             if has_search {
@@ -551,8 +517,8 @@ impl BudgetRepository {
         };
 
         // Bind parameters in the correct order
-        // For role-filtered: user_id, role, start_of_month, start_of_month, org_id, [search], [type], page_size, offset
-        // For non-role: user_id, start_of_month, start_of_month, org_id, [search], [type], page_size, offset
+        // For role-filtered: user_id, role, org_id, [search], [type], page_size, offset
+        // For non-role: user_id, org_id, [search], [type], page_size, offset
         let rows = {
             let mut q = sqlx::query_as::<_, DbBudget>(&data_sql);
             if let Some(ref rs) = role_str {
@@ -560,7 +526,7 @@ impl BudgetRepository {
             } else {
                 q = q.bind(user_id);
             }
-            q = q.bind(&start_of_month).bind(&start_of_month).bind(org_id);
+            q = q.bind(org_id);
             if let Some(ref sl) = search_like {
                 q = q.bind(sl);
             }
@@ -582,11 +548,6 @@ impl BudgetRepository {
         page: i32,
         page_size: i32,
     ) -> Result<(Vec<DbBudget>, i32)> {
-        let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string();
-        let month = now.format("%m").to_string();
-        let start_of_month = format!("{year}-{month:02}-01");
-
         let offset = (page - 1) * page_size;
 
         let base_where = if org_id.is_empty() {
@@ -622,8 +583,8 @@ impl BudgetRepository {
                   bm.role AS my_role,
                   el.monthly_limit AS envelope_limit,
                   COALESCE(mc.member_count, 0) AS member_count,
-                  COALESCE(cs.current_spend, 0) AS current_spend,
-                  b.is_private,
+                  0 AS current_spend,
+                  b.is_private, b.period_start_day, b.timezone,
                   COALESCE(ia.asset_count, 0) AS asset_count,
                   COALESCE(ip.total_current_value, 0) AS total_current_value,
                   COALESCE(ip.total_cost_basis, 0) AS total_cost_basis
@@ -635,15 +596,6 @@ impl BudgetRepository {
                    FROM budget_members
                    GROUP BY budget_id
                ) mc ON mc.budget_id = BINARY b.id
-               LEFT JOIN (
-                   SELECT budget_id AS budget_id, CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) AS current_spend
-                   FROM entries
-                   WHERE kind = 'expense'
-                     AND entry_date >= ?
-                     AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-                     AND deleted_at IS NULL
-                   GROUP BY budget_id
-               ) cs ON cs.budget_id = BINARY b.id
                LEFT JOIN (
                    SELECT budget_id, COUNT(*) AS asset_count
                    FROM invest_assets
@@ -665,8 +617,6 @@ impl BudgetRepository {
         );
 
         let rows = sqlx::query_as::<_, DbBudget>(&query)
-            .bind(&start_of_month)
-            .bind(&start_of_month)
             .bind(page_size)
             .bind(offset)
             .fetch_all(&self.pool)
@@ -834,28 +784,6 @@ impl BudgetRepository {
         .fetch_optional(&self.pool)
         .await?;
         let val: Option<i64> = row.map(|r| sqlx::Row::get(&r, 0));
-        Ok(val)
-    }
-
-    /// Sum of expense entries in the current calendar month (shared DB with Entry service).
-    pub async fn get_current_month_spend(&self, budget_id: &str) -> Result<i64> {
-        let now = chrono::Utc::now();
-        let year = now.format("%Y").to_string();
-        let month = now.format("%m").to_string();
-        let start_of_month = format!("{year}-{month:02}-01");
-        let row = sqlx::query(
-            "SELECT CAST(COALESCE(SUM(amount_minor), 0) AS SIGNED) FROM entries
-             WHERE BINARY budget_id = BINARY ? AND kind = 'expense'
-               AND entry_date >= ?
-               AND entry_date < DATE_ADD(?, INTERVAL 1 MONTH)
-               AND deleted_at IS NULL",
-        )
-        .bind(budget_id)
-        .bind(&start_of_month)
-        .bind(&start_of_month)
-        .fetch_one(&self.pool)
-        .await?;
-        let val: i64 = sqlx::Row::get(&row, 0);
         Ok(val)
     }
 

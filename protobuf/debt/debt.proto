@@ -1,0 +1,323 @@
+syntax = "proto3";
+
+package service.debt;
+
+option go_package = "github.com/philandz/philand/protobuf/debt";
+
+// Debt book: a Debt budget holds many debt accounts (money the owner borrowed).
+// Money is VND minor units. Dates are YYYY-MM-DD. Rates are decimal strings in percent per year
+// ("8.9" = 8.9 %/year) so no float rounding reaches a calculation.
+// Enum-like values are strings on purpose: a new debt kind or repayment method must not need a
+// proto change (plan DB3).
+
+message RatePeriod {
+  string id             = 1;
+  string effective_from = 2;
+  string annual_rate    = 3;  // percent per year, e.g. "8.9"
+  string rate_type      = 4;  // fixed | floating
+  string note           = 5;
+}
+
+message PrepayRule {
+  string id                            = 1;
+  string valid_from                    = 2;
+  string valid_to                      = 3;  // empty = open ended
+  int64  free_allowance_per_month_minor = 4;
+  string fee_pct                       = 5;  // percent of the part above the allowance
+  int64  min_fee_minor                 = 6;
+  string note                          = 7;
+}
+
+message NextDue {
+  string due_date        = 1;
+  int64  principal_minor = 2;
+  int64  interest_minor  = 3;
+  int64  fee_minor       = 4;
+  int64  total_minor     = 5;
+  bool   estimated       = 6;  // true when a floating rate or the schedule estimate is involved
+}
+
+message DebtAccount {
+  string id                         = 1;
+  string budget_id                  = 2;
+  string name                       = 3;
+  string lender                     = 4;
+  string kind                       = 5;  // consumer | mortgage | car | installment | personal | other
+  string repayment_method           = 6;  // annuity | equal_principal | interest_only | fixed_installments | no_schedule
+  string currency                   = 7;
+  int64  opening_outstanding_minor  = 8;
+  int64  outstanding_minor          = 9;
+  string tracking_start_date        = 10;
+  string maturity_date              = 11;
+  int32  remaining_periods          = 12;  // at tracking start (input echo)
+  int32  due_day                    = 13;  // 1..28, 31 = last day of month
+  int64  periodic_fee_minor         = 14;
+  string day_count                  = 15;  // actual_365 | monthly
+  string interest_category_id       = 16;
+  string pay_from_budget_id         = 17;
+  string status                     = 18;  // active | settled | closed
+  int64  version                    = 19;
+  int64  created_at                 = 20;
+  int64  updated_at                 = 21;
+  string interest_through           = 22;  // interest is settled up to this date
+  string last_due_date              = 23;  // last scheduled due date that was paid
+  int64  installment_minor          = 24;  // >0: fixed instalment kept after a "reduce term" prepayment
+  repeated RatePeriod rate_periods  = 25;
+  repeated PrepayRule prepay_rules  = 26;
+  NextDue next_due                  = 27;
+  int64  paid_principal_minor       = 28;
+  int64  total_paid_minor           = 29;
+  int64  total_cost_minor           = 30;  // interest + fees paid
+  string estimated_payoff_date      = 31;
+}
+
+message CreateDebtAccountRequest {
+  string budget_id                 = 1;
+  string name                      = 2;
+  string lender                    = 3;
+  string kind                      = 4;
+  string repayment_method          = 5;
+  int64  opening_outstanding_minor = 6;
+  string tracking_start_date       = 7;
+  string maturity_date             = 8;  // either this ...
+  int32  remaining_periods         = 9;  // ... or this for scheduled methods
+  int32  due_day                   = 10;
+  int64  periodic_fee_minor        = 11;
+  string day_count                 = 12;
+  string interest_category_id      = 13;
+  string pay_from_budget_id        = 14;
+  repeated RatePeriod rate_periods = 15;
+  repeated PrepayRule prepay_rules = 16;
+  string currency                  = 17;  // empty = VND
+}
+
+message UpdateDebtAccountRequest {
+  string budget_id                    = 1;
+  string account_id                   = 2;
+  optional string name                = 3;
+  optional string lender              = 4;
+  optional string kind                = 5;
+  optional int32  due_day             = 6;
+  optional int64  periodic_fee_minor  = 7;
+  optional string maturity_date       = 8;
+  optional string day_count           = 9;
+  optional string interest_category_id = 10;
+  optional string pay_from_budget_id  = 11;
+  int64  expected_version             = 12;  // 0 = skip the check
+}
+
+message DebtAccountRef {
+  string budget_id  = 1;
+  string account_id = 2;
+}
+
+message ListDebtAccountsRequest {
+  string budget_id       = 1;
+  bool   include_closed  = 2;
+}
+message ListDebtAccountsResponse { repeated DebtAccount accounts = 1; }
+
+message SetRatePeriodRequest {
+  string budget_id  = 1;
+  string account_id = 2;
+  RatePeriod rate   = 3;
+}
+message DeleteRatePeriodRequest {
+  string budget_id  = 1;
+  string account_id = 2;
+  string rate_id    = 3;
+}
+message SetPrepayRuleRequest {
+  string budget_id  = 1;
+  string account_id = 2;
+  PrepayRule rule   = 3;
+}
+message DeletePrepayRuleRequest {
+  string budget_id  = 1;
+  string account_id = 2;
+  string rule_id    = 3;
+}
+
+message ScheduleRow {
+  int32  seq                  = 1;
+  string due_date             = 2;
+  int64  principal_minor      = 3;
+  int64  interest_minor       = 4;
+  int64  fee_minor            = 5;
+  int64  total_minor          = 6;
+  int64  balance_after_minor  = 7;
+  string annual_rate          = 8;
+  bool   estimated            = 9;
+}
+message GetScheduleRequest {
+  string budget_id  = 1;
+  string account_id = 2;
+  int32  max_rows   = 3;  // 0 = all rows up to maturity (cap 600)
+}
+message GetScheduleResponse {
+  repeated ScheduleRow rows   = 1;
+  string payoff_date          = 2;
+  int64  total_interest_minor = 3;  // over the projected rows
+  bool   estimated            = 4;
+}
+
+message QuotePaymentRequest {
+  string budget_id          = 1;
+  string account_id         = 2;
+  string kind               = 3;  // scheduled | prepayment | settlement
+  string paid_on            = 4;
+  int64  prepay_amount_minor = 5; // principal of a prepayment
+  string prepay_effect      = 6;  // reduce_term | reduce_installment
+}
+message QuotePaymentResponse {
+  int64  principal_minor           = 1;
+  int64  interest_minor            = 2;
+  int64  fee_minor                 = 3;
+  int64  total_minor               = 4;
+  int64  suggested_fee_minor       = 5;
+  int64  allowance_used_minor      = 6;  // prepaid in this calendar month so far
+  int64  allowance_remaining_minor = 7;
+  string due_date                  = 8;
+  string interest_from             = 9;
+  string interest_to               = 10;
+  int32  days                      = 11;
+  string annual_rate               = 12;
+  int64  outstanding_after_minor   = 13;
+  bool   estimated                 = 14;
+  int64  allowance_before_minor    = 15;  // free prepayment allowance left before this payment
+  int64  taxable_minor             = 16;  // part of the prepayment above the allowance (charged fee_pct)
+  bool   has_rule                  = 17;  // a prepayment rule is in force on paid_on
+  string fee_pct                   = 18;  // of that rule, e.g. "3"
+  // Prepayment only: the projected schedule now and after each prepay effect (an estimate).
+  string payoff_date_before          = 19;
+  int64  total_interest_before_minor = 20;
+  repeated PrepayOutcome outcomes    = 21;
+}
+message PrepayOutcome {
+  string effect               = 1;  // reduce_term | reduce_installment
+  string payoff_date          = 2;
+  int64  installment_minor    = 3;  // next instalment after the prepayment
+  int64  total_interest_minor = 4;  // projected interest still to pay
+  int32  periods              = 5;
+}
+
+message RecordPaymentRequest {
+  string budget_id            = 1;  // the debt budget
+  string account_id           = 2;
+  string kind                 = 3;  // scheduled | prepayment | settlement
+  string paid_on              = 4;
+  int64  principal_minor      = 5;
+  int64  interest_minor       = 6;
+  int64  fee_minor            = 7;
+  string from_budget_id       = 8;  // Standard budget that pays
+  string category_id          = 9;  // Standard category for interest + fee (required when > 0)
+  string prepay_effect        = 10; // reduce_term | reduce_installment (prepayment only)
+  string note                 = 11;
+  string idempotency_key      = 12; // required, max 60
+  string due_date             = 13; // scheduled payments: the instalment date being settled
+  bool   fee_overridden       = 14; // user changed the suggested prepayment fee
+}
+
+message DebtPayment {
+  string id                 = 1;
+  string account_id         = 2;
+  string budget_id          = 3;
+  string paid_on            = 4;
+  string kind               = 5;
+  int64  principal_minor    = 6;
+  int64  interest_minor     = 7;
+  int64  fee_minor          = 8;
+  int64  total_minor        = 9;
+  string prepay_effect      = 10;
+  int64  suggested_fee_minor = 11;
+  string from_budget_id     = 12;
+  string entry_group_id     = 13;
+  string status             = 14;
+  string note               = 15;
+  string due_date           = 16;
+  int64  created_at         = 17;
+  string actor_user_id      = 18;
+}
+
+message RecordPaymentResponse {
+  DebtPayment payment            = 1;
+  int64  outstanding_minor       = 2;
+  bool   suggest_settle          = 3;  // outstanding reached 0 (D7)
+}
+
+message AdjustOutstandingRequest {
+  string budget_id       = 1;
+  string account_id      = 2;
+  int64  new_outstanding_minor = 3;
+  string reason          = 4;  // required
+  string occurred_on     = 5;
+  string idempotency_key = 6;
+}
+
+message ListDebtPaymentsRequest {
+  string budget_id  = 1;
+  string account_id = 2;  // empty = every account of the book
+  int32  page       = 3;
+  int32  page_size  = 4;
+}
+message ListDebtPaymentsResponse {
+  repeated DebtPayment payments = 1;
+  int64 total_rows              = 2;
+}
+
+message DebtEvent {
+  string id            = 1;
+  string account_id    = 2;
+  string kind          = 3;
+  int64  amount_minor  = 4;
+  string payload       = 5;  // JSON text
+  string actor_user_id = 6;
+  string occurred_on   = 7;
+  int64  created_at    = 8;
+}
+message ListDebtEventsRequest {
+  string budget_id  = 1;
+  string account_id = 2;  // empty = every account of the book
+  int32  page       = 3;
+  int32  page_size  = 4;
+}
+message ListDebtEventsResponse {
+  repeated DebtEvent events = 1;
+  int64 total_rows          = 2;
+}
+
+message GetDebtBookSummaryRequest { string budget_id = 1; }
+message DebtBookSummary {
+  string budget_id                = 1;
+  string currency                 = 2;
+  int64  total_outstanding_minor  = 3;
+  int64  due_this_month_minor     = 4;  // sum of next instalments falling in the current month
+  string next_due_date            = 5;
+  int64  next_due_minor           = 6;
+  string next_due_account_id      = 7;
+  int64  total_paid_minor         = 8;
+  int64  total_cost_minor         = 9;  // of which interest + fees
+  int32  active_accounts          = 10;
+  int32  settled_accounts         = 11;
+}
+
+service DebtService {
+  rpc CreateDebtAccount(CreateDebtAccountRequest) returns (DebtAccount);
+  rpc UpdateDebtAccount(UpdateDebtAccountRequest) returns (DebtAccount);
+  rpc CloseDebtAccount(DebtAccountRef) returns (DebtAccount);
+  rpc ReopenDebtAccount(DebtAccountRef) returns (DebtAccount);
+  rpc SettleDebtAccount(DebtAccountRef) returns (DebtAccount);
+  rpc ListDebtAccounts(ListDebtAccountsRequest) returns (ListDebtAccountsResponse);
+  rpc GetDebtAccount(DebtAccountRef) returns (DebtAccount);
+  rpc SetRatePeriod(SetRatePeriodRequest) returns (DebtAccount);
+  rpc DeleteRatePeriod(DeleteRatePeriodRequest) returns (DebtAccount);
+  rpc SetPrepayRule(SetPrepayRuleRequest) returns (DebtAccount);
+  rpc DeletePrepayRule(DeletePrepayRuleRequest) returns (DebtAccount);
+  rpc GetSchedule(GetScheduleRequest) returns (GetScheduleResponse);
+  rpc QuotePayment(QuotePaymentRequest) returns (QuotePaymentResponse);
+  rpc RecordPayment(RecordPaymentRequest) returns (RecordPaymentResponse);
+  rpc AdjustOutstanding(AdjustOutstandingRequest) returns (DebtAccount);
+  rpc ListDebtPayments(ListDebtPaymentsRequest) returns (ListDebtPaymentsResponse);
+  rpc ListDebtEvents(ListDebtEventsRequest) returns (ListDebtEventsResponse);
+  rpc GetDebtBookSummary(GetDebtBookSummaryRequest) returns (DebtBookSummary);
+}

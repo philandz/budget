@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package service.category;
+
+option go_package = "github.com/philandz/philand/protobuf/category";
+
+import "libs/protobuf/common/base.proto";
+import "libs/protobuf/google/api/annotations.proto";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum CategoryType {
+  CATEGORY_TYPE_UNSPECIFIED = 0;
+  CATEGORY_TYPE_EXPENSE     = 1;
+  CATEGORY_TYPE_INCOME      = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+message Category {
+  common.base.Base base             = 1;
+  string           budget_id        = 2;
+  string           name             = 3;
+  CategoryType     kind             = 4;
+  string           icon             = 5;   // emoji or icon key
+  string           color            = 6;   // hex color e.g. "#6366f1"
+  optional int64   planned_amount   = 7;
+  int64            actual_spend     = 8;   // computed: sum of entries this month
+  double           usage_pct       = 9;   // actual_spend / planned_amount * 100
+  int64            tx_count        = 10;  // total entry count
+  bool             archived        = 11;
+}
+
+// ---------------------------------------------------------------------------
+// CRUD requests / responses
+// ---------------------------------------------------------------------------
+
+message CreateCategoryRequest {
+  string budget_id      = 1;
+  string name           = 2;
+  CategoryType kind = 3;
+  string icon           = 4;
+  string color          = 5;
+  optional int64 planned_amount = 6;
+}
+
+message UpdateCategoryRequest {
+  string category_id    = 1;
+  optional string name           = 2;
+  optional string icon           = 3;
+  optional string color          = 4;
+  optional int64  planned_amount = 5;
+}
+
+message ArchiveCategoryRequest  { string category_id = 1; }
+message ArchiveCategoryResponse { bool success = 1; }
+
+message DeleteCategoryRequest   { string category_id = 1; }
+message DeleteCategoryResponse  { bool success = 1; }
+
+message GetCategoryRequest      { string category_id = 1; }
+message GetCategoryResponse     { Category category = 1; }
+
+message ListCategoriesRequest   { string budget_id = 1; }
+message ListCategoriesResponse  { repeated Category categories = 1; }
+
+// Admin: list categories for any budget (super_admin only)
+message ListCategoriesAdminRequest {
+  string budget_id = 1;
+  string kind = 2;  // filter by category type: "expense", "income", or "" for all
+}
+message ListCategoriesAdminResponse { repeated Category categories = 1; }
+
+// ---------------------------------------------------------------------------
+// Period planning (plan R3)
+// ---------------------------------------------------------------------------
+
+enum PlanScope {
+  PLAN_SCOPE_UNSPECIFIED = 0;
+  PLAN_SCOPE_THIS_PERIOD = 1;  // override for one budget period only
+  PLAN_SCOPE_DEFAULT     = 2;  // new default for every period (categories.planned_amount)
+}
+
+message PlanItem {
+  string    category_id    = 1;
+  int64     planned_amount = 2;  // >= 0
+  PlanScope scope          = 3;
+}
+
+message CategoryPlan {
+  string       category_id      = 1;
+  string       name             = 2;
+  CategoryType kind             = 3;
+  string       icon             = 4;
+  string       color            = 5;
+  int64        default_planned  = 6;  // categories.planned_amount (0 if unset)
+  optional int64 period_override = 7; // set when this period has its own amount
+  int64        planned          = 8;  // effective: override if present, else default
+  bool         archived         = 9;
+  int64        created_at       = 10; // unix seconds; plans before this do not apply (no fake rollover)
+}
+
+message BudgetPlan {
+  string budget_id            = 1;
+  string period_from          = 2;  // YYYY-MM-DD inclusive
+  string period_to            = 3;  // YYYY-MM-DD exclusive
+  repeated CategoryPlan categories = 4;
+  int64  unallocated_planned  = 5;  // planned spend with no category
+  int64  total_planned        = 6;  // sum of expense categories + unallocated
+}
+
+message GetPlanRequest {
+  string budget_id     = 1;
+  int32  period_offset = 2;  // 0 = current period, -1 = previous, 1 = next
+}
+
+message SetPeriodPlanRequest {
+  string budget_id     = 1;
+  int32  period_offset = 2;
+  repeated PlanItem items = 3;
+  optional int64 unallocated_planned = 4;
+}
+
+message GetPlanRangeRequest {
+  string budget_id   = 1;
+  int32  from_offset = 2;  // inclusive, e.g. -12
+  int32  to_offset   = 3;  // inclusive, e.g. 0; at most 24 periods per call
+}
+
+message GetPlanRangeResponse {
+  repeated BudgetPlan plans = 1;  // oldest first
+}
+
+message SeedCategoryItem {
+  string       name           = 1;
+  CategoryType kind           = 2;
+  string       icon           = 3;
+  string       color          = 4;
+  optional int64 planned_amount = 5;
+}
+
+message SeedCategoriesRequest {
+  string budget_id = 1;
+  repeated SeedCategoryItem items = 2;
+}
+
+message SeedCategoriesResponse {
+  int32 created = 1;
+  int32 skipped = 2;  // same name+kind already existed
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+service CategoryService {
+  rpc CreateCategory(CreateCategoryRequest) returns (Category) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/categories" body: "*" };
+  }
+  rpc UpdateCategory(UpdateCategoryRequest) returns (Category) {
+    option (google.api.http) = { patch: "/categories/{category_id}" body: "*" };
+  }
+  rpc ArchiveCategory(ArchiveCategoryRequest) returns (ArchiveCategoryResponse) {
+    option (google.api.http) = { patch: "/categories/{category_id}/archive" body: "*" };
+  }
+  rpc DeleteCategory(DeleteCategoryRequest) returns (DeleteCategoryResponse) {
+    option (google.api.http) = { delete: "/categories/{category_id}" };
+  }
+  rpc GetCategory(GetCategoryRequest) returns (GetCategoryResponse) {
+    option (google.api.http) = { get: "/categories/{category_id}" };
+  }
+  rpc ListCategories(ListCategoriesRequest) returns (ListCategoriesResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/categories" };
+  }
+  // Plan for a budget period: per-category amounts (default + per-period override).
+  rpc GetPlan(GetPlanRequest) returns (BudgetPlan) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/plan" };
+  }
+  // Internal (insight rollover): plans for several periods in one call.
+  rpc GetPlanRange(GetPlanRangeRequest) returns (GetPlanRangeResponse) {}
+  // Manager+: set amounts for this period or as the new default.
+  rpc SetPeriodPlan(SetPeriodPlanRequest) returns (BudgetPlan) {
+    option (google.api.http) = { put: "/budgets/{budget_id}/plan" body: "*" };
+  }
+  // Internal, idempotent: create template/default categories (skips same name+kind).
+  rpc SeedCategories(SeedCategoriesRequest) returns (SeedCategoriesResponse) {}
+  // Admin: list categories for any budget (super_admin only)
+  rpc ListCategoriesAdmin(ListCategoriesAdminRequest) returns (ListCategoriesAdminResponse) {}
+}
