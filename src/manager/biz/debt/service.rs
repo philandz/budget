@@ -101,6 +101,16 @@ pub struct DebtBiz {
 }
 
 /// Everything the engine needs about one account.
+/// What a lifecycle change (close / reopen / settle) requires and records.
+struct StatusChange<'a> {
+    /// Statuses the account may currently be in.
+    from: &'a [&'a str],
+    /// Target status; `None` = reopen (active, or settled when nothing is owed).
+    to: Option<&'a str>,
+    event: &'a str,
+    require_zero: bool,
+}
+
 struct Loaded {
     acc: DbDebtAccount,
     rates: Vec<sch::Rate>,
@@ -440,7 +450,7 @@ impl DebtBiz {
     async fn account_view(&self, l: &Loaded) -> Result<pb::DebtAccount, Status> {
         let totals = self
             .repo
-            .totals_for_accounts(&[l.acc.id.clone()])
+            .totals_for_accounts(std::slice::from_ref(&l.acc.id))
             .await
             .map_err(internal)?
             .remove(&l.acc.id)
@@ -733,11 +743,14 @@ impl DebtBiz {
         user_id: &str,
         r: pb::DebtAccountRef,
         user_type: Option<&str>,
-        from: &[&str],
-        to: Option<&str>,
-        event: &str,
-        require_zero: bool,
+        change: StatusChange<'_>,
     ) -> Result<pb::DebtAccount, Status> {
+        let StatusChange {
+            from,
+            to,
+            event,
+            require_zero,
+        } = change;
         self.assert_role(&r.budget_id, user_id, BudgetRole::Manager, user_type)
             .await?;
         let l = self.load(&r.budget_id, &r.account_id).await?;
@@ -782,10 +795,12 @@ impl DebtBiz {
             u,
             r,
             t,
-            &["active", "settled"],
-            Some("closed"),
-            "closed",
-            false,
+            StatusChange {
+                from: &["active", "settled"],
+                to: Some("closed"),
+                event: "closed",
+                require_zero: false,
+            },
         )
         .await
     }
@@ -796,8 +811,18 @@ impl DebtBiz {
         r: pb::DebtAccountRef,
         t: Option<&str>,
     ) -> Result<pb::DebtAccount, Status> {
-        self.change_status(u, r, t, &["closed"], None, "reopened", false)
-            .await
+        self.change_status(
+            u,
+            r,
+            t,
+            StatusChange {
+                from: &["closed"],
+                to: None,
+                event: "reopened",
+                require_zero: false,
+            },
+        )
+        .await
     }
 
     /// D7: settling is explicit, and only at zero.
@@ -807,8 +832,18 @@ impl DebtBiz {
         r: pb::DebtAccountRef,
         t: Option<&str>,
     ) -> Result<pb::DebtAccount, Status> {
-        self.change_status(u, r, t, &["active"], Some("settled"), "settled", true)
-            .await
+        self.change_status(
+            u,
+            r,
+            t,
+            StatusChange {
+                from: &["active"],
+                to: Some("settled"),
+                event: "settled",
+                require_zero: true,
+            },
+        )
+        .await
     }
 
     pub async fn get_account(
@@ -1186,12 +1221,10 @@ impl DebtBiz {
                     ));
                 }
             }
-            "settlement" => {
-                if req.principal_minor != outstanding {
-                    return Err(Status::failed_precondition(
-                        "a settlement pays the whole outstanding balance",
-                    ));
-                }
+            "settlement" if req.principal_minor != outstanding => {
+                return Err(Status::failed_precondition(
+                    "a settlement pays the whole outstanding balance",
+                ));
             }
             _ => {}
         }

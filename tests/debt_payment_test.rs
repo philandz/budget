@@ -158,7 +158,10 @@ async fn d3_the_balance_can_be_recomputed_from_payments_and_adjustments() {
     let acc = repo.get_account(&a.id).await.unwrap().unwrap();
     assert_eq!(acc.outstanding_minor, 600_000);
     assert_eq!(repo.recomputed_outstanding(&a.id).await.unwrap(), 600_000);
-    let totals = repo.totals_for_accounts(&[a.id.clone()]).await.unwrap();
+    let totals = repo
+        .totals_for_accounts(std::slice::from_ref(&a.id))
+        .await
+        .unwrap();
     let t = totals[&a.id];
     assert_eq!(
         (t.paid_principal, t.paid_interest, t.total_paid()),
