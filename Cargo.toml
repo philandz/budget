@@ -17,6 +17,7 @@ tracing = "0.1"
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+chrono-tz = "0.9"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.7", features = ["mysql", "runtime-tokio", "macros", "chrono", "uuid", "migrate"] }
 tower = "0.4"
@@ -38,6 +39,7 @@ philand_random     = { package = "random",      path = "../libs/random" }
 philand_validator  = { package = "validator",   path = "../libs/validator" }
 philand_notify     = { package = "notify",       path = "../libs/notify" }
 rust_decimal      = { version = "1", features = ["serde-with-str"] }
+futures = "0.3"
 metrics-exporter-prometheus = "0.15"
 
 [dev-dependencies]

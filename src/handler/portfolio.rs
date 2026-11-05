@@ -9,15 +9,18 @@ use tonic::{Request, Response, Status};
 
 use crate::manager::biz::portfolio::biz::PortfolioBiz;
 use crate::manager::validate;
+use crate::pb::service::budget::BudgetRole;
 use crate::pb::service::portfolio::portfolio_service_server::PortfolioService;
 use crate::pb::service::portfolio::{
-    ArchiveAssetRequest, CreateCryptoLotRequest, CreateEtfLotRequest, CreateFixedDepositRequest,
-    CreateGoldLotRequest, CreateSavingsAccountRequest, CreateStockLotRequest, GetAssetRequest,
-    GetAssetResponse, GetPortfolioSummaryRequest, GetPortfolioSummaryResponse,
-    ListAssetActivityRequest, ListAssetActivityResponse, ListAssetsRequest, ListAssetsResponse,
-    ListPriceObservationsRequest, ListPriceObservationsResponse, PortfolioAsset, PriceObservation,
-    RecordPriceObservationRequest, RecordStockDisposalRequest, UpdateAssetMetadataRequest,
-    ValuatedAsset,
+    AdjustFundCashRequest, ArchiveAssetRequest, CreateCryptoLotRequest, CreateEtfLotRequest,
+    CreateFixedDepositRequest, CreateGoldLotRequest, CreateSavingsAccountRequest,
+    CreateStockLotRequest, FundCashMovement, FundSummary, FundTransferRequest,
+    FundTransferResponse, FundingSource, GetAssetRequest, GetAssetResponse, GetFundSummaryRequest,
+    GetPortfolioSummaryRequest, GetPortfolioSummaryResponse, ListAssetActivityRequest,
+    ListAssetActivityResponse, ListAssetsRequest, ListAssetsResponse, ListFundCashMovementsRequest,
+    ListFundCashMovementsResponse, ListPriceObservationsRequest, ListPriceObservationsResponse,
+    PortfolioAsset, PriceObservation, RecordPriceObservationRequest, RecordStockDisposalRequest,
+    UpdateAssetMetadataRequest, ValuatedAsset,
 };
 
 pub struct PortfolioHandler {
@@ -164,7 +167,31 @@ impl PortfolioService for PortfolioHandler {
         let req = request.into_inner();
         let interest_method = i32_method_to_db(req.interest_method);
         let payout_type = i32_payout_to_db(req.payout_type);
-        let asset = self
+        let pocket = req.funding_source == FundingSource::CashPocket as i32;
+        if pocket {
+            self.biz
+                .assert_min_role(
+                    &req.budget_id,
+                    &user_id,
+                    BudgetRole::Manager,
+                    user_type.as_deref(),
+                )
+                .await?;
+        }
+        let idem = (!req.idempotency_key.is_empty()).then_some(req.idempotency_key.as_str());
+        let purchase_amount: i64 = req.current_balance;
+        let hold = self
+            .biz
+            .debit_for_purchase(
+                &user_id,
+                &req.budget_id,
+                req.funding_source,
+                purchase_amount,
+                idem,
+                "Savings deposit",
+            )
+            .await?;
+        let created = self
             .biz
             .create_savings_account(
                 &user_id,
@@ -191,7 +218,18 @@ impl PortfolioService for PortfolioHandler {
                 },
                 user_type.as_deref(),
             )
-            .await?;
+            .await;
+        let asset = match created {
+            Ok(a) => a,
+            Err(e) => {
+                if let Some(k) = hold {
+                    self.biz
+                        .refund_purchase(&user_id, &req.budget_id, purchase_amount, &k)
+                        .await;
+                }
+                return Err(e);
+            }
+        };
         Ok(Response::new(asset))
     }
 
@@ -205,7 +243,31 @@ impl PortfolioService for PortfolioHandler {
         let interest_method = i32_method_to_db(req.interest_method);
         let payout_type = i32_payout_to_db(req.payout_type);
         let auto_renewal = i32_auto_renewal_to_db(req.auto_renewal_policy);
-        let asset = self
+        let pocket = req.funding_source == FundingSource::CashPocket as i32;
+        if pocket {
+            self.biz
+                .assert_min_role(
+                    &req.budget_id,
+                    &user_id,
+                    BudgetRole::Manager,
+                    user_type.as_deref(),
+                )
+                .await?;
+        }
+        let idem = (!req.idempotency_key.is_empty()).then_some(req.idempotency_key.as_str());
+        let purchase_amount: i64 = req.principal;
+        let hold = self
+            .biz
+            .debit_for_purchase(
+                &user_id,
+                &req.budget_id,
+                req.funding_source,
+                purchase_amount,
+                idem,
+                "Fixed deposit",
+            )
+            .await?;
+        let created = self
             .biz
             .create_fixed_deposit(
                 &user_id,
@@ -234,7 +296,18 @@ impl PortfolioService for PortfolioHandler {
                 },
                 user_type.as_deref(),
             )
-            .await?;
+            .await;
+        let asset = match created {
+            Ok(a) => a,
+            Err(e) => {
+                if let Some(k) = hold {
+                    self.biz
+                        .refund_purchase(&user_id, &req.budget_id, purchase_amount, &k)
+                        .await;
+                }
+                return Err(e);
+            }
+        };
         Ok(Response::new(asset))
     }
 
@@ -258,7 +331,31 @@ impl PortfolioService for PortfolioHandler {
         }
         let purchase_cost =
             (qty_f * req.purchase_price_per_unit_original as f64).round() as i64 + req.fees;
-        let asset = self
+        let pocket = req.funding_source == FundingSource::CashPocket as i32;
+        if pocket {
+            self.biz
+                .assert_min_role(
+                    &req.budget_id,
+                    &user_id,
+                    BudgetRole::Manager,
+                    user_type.as_deref(),
+                )
+                .await?;
+        }
+        let idem = (!req.idempotency_key.is_empty()).then_some(req.idempotency_key.as_str());
+        let purchase_amount: i64 = purchase_cost;
+        let hold = self
+            .biz
+            .debit_for_purchase(
+                &user_id,
+                &req.budget_id,
+                req.funding_source,
+                purchase_amount,
+                idem,
+                "Gold purchase",
+            )
+            .await?;
+        let created = self
             .biz
             .create_gold_lot(
                 &user_id,
@@ -287,7 +384,18 @@ impl PortfolioService for PortfolioHandler {
                 },
                 user_type.as_deref(),
             )
-            .await?;
+            .await;
+        let asset = match created {
+            Ok(a) => a,
+            Err(e) => {
+                if let Some(k) = hold {
+                    self.biz
+                        .refund_purchase(&user_id, &req.budget_id, purchase_amount, &k)
+                        .await;
+                }
+                return Err(e);
+            }
+        };
         Ok(Response::new(asset))
     }
 
@@ -560,23 +668,118 @@ impl PortfolioService for PortfolioHandler {
 
     async fn record_gold_disposal(
         &self,
-        _request: Request<crate::pb::service::portfolio::RecordGoldDisposalRequest>,
+        request: Request<crate::pb::service::portfolio::RecordGoldDisposalRequest>,
     ) -> Result<Response<PortfolioAsset>, Status> {
-        Err(Status::unimplemented("gold disposal arrives in Phase 3.1"))
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        let asset = self
+            .biz
+            .record_gold_disposal(&user_id, &req, user_type.as_deref())
+            .await?;
+        Ok(Response::new(asset))
     }
 
     async fn record_fixed_deposit_maturity(
         &self,
-        _request: Request<crate::pb::service::portfolio::RecordFixedDepositMaturityRequest>,
+        request: Request<crate::pb::service::portfolio::RecordFixedDepositMaturityRequest>,
     ) -> Result<Response<PortfolioAsset>, Status> {
-        Err(Status::unimplemented("maturity arrives in Phase 3.2"))
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        let asset = self
+            .biz
+            .record_fixed_deposit_maturity(&user_id, &req, user_type.as_deref())
+            .await?;
+        Ok(Response::new(asset))
     }
 
     async fn record_fixed_deposit_rollover(
         &self,
-        _request: Request<crate::pb::service::portfolio::RecordFixedDepositRolloverRequest>,
+        request: Request<crate::pb::service::portfolio::RecordFixedDepositRolloverRequest>,
     ) -> Result<Response<PortfolioAsset>, Status> {
-        Err(Status::unimplemented("rollover arrives in Phase 3.3"))
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        let asset = self
+            .biz
+            .record_rollover(&user_id, &req, user_type.as_deref())
+            .await?;
+        Ok(Response::new(asset))
+    }
+
+    // -----------------------------------------------------------------
+    // Fund (saving budget): cash pocket
+    // -----------------------------------------------------------------
+
+    async fn get_fund_summary(
+        &self,
+        request: Request<GetFundSummaryRequest>,
+    ) -> Result<Response<FundSummary>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        Ok(Response::new(
+            self.biz
+                .get_fund_summary(&user_id, &req.budget_id, user_type.as_deref())
+                .await?,
+        ))
+    }
+
+    async fn list_fund_cash_movements(
+        &self,
+        request: Request<ListFundCashMovementsRequest>,
+    ) -> Result<Response<ListFundCashMovementsResponse>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        Ok(Response::new(
+            self.biz
+                .list_fund_cash_movements(&user_id, &req, user_type.as_deref())
+                .await?,
+        ))
+    }
+
+    async fn deposit_to_fund(
+        &self,
+        request: Request<FundTransferRequest>,
+    ) -> Result<Response<FundTransferResponse>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        Ok(Response::new(
+            self.biz
+                .deposit_to_fund(&user_id, &req, user_type.as_deref())
+                .await?,
+        ))
+    }
+
+    async fn withdraw_from_fund(
+        &self,
+        request: Request<FundTransferRequest>,
+    ) -> Result<Response<FundTransferResponse>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        Ok(Response::new(
+            self.biz
+                .withdraw_from_fund(&user_id, &req, user_type.as_deref())
+                .await?,
+        ))
+    }
+
+    async fn adjust_fund_cash(
+        &self,
+        request: Request<AdjustFundCashRequest>,
+    ) -> Result<Response<FundCashMovement>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        Ok(Response::new(
+            self.biz
+                .adjust_fund_cash(&user_id, &req, user_type.as_deref())
+                .await?,
+        ))
     }
 
     async fn run_backfill(

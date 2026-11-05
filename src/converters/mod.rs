@@ -1,6 +1,7 @@
 use crate::pb::common::base::Base;
 use crate::pb::service::budget::{Budget, BudgetMember, BudgetRole, BudgetType, RolloverPolicy};
 
+pub mod fund;
 pub mod portfolio;
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,20 @@ pub struct DbBudget {
     pub member_count: Option<i32>,
     // current month spend for this budget
     pub current_spend: Option<i64>,
+    // sharing budget visibility
+    pub is_private: bool,
+    // budget period (selected together with is_private; absent in ad-hoc queries)
+    #[sqlx(default)]
+    pub period_start_day: Option<i32>,
+    #[sqlx(default)]
+    pub timezone: Option<String>,
+    // real portfolio totals (populated via JOIN with invest_assets for admin list)
+    #[sqlx(default)]
+    pub asset_count: Option<i32>,
+    #[sqlx(default)]
+    pub total_current_value: Option<i64>,
+    #[sqlx(default)]
+    pub total_cost_basis: Option<i64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -135,6 +150,15 @@ pub fn map_budget(db: DbBudget) -> Budget {
             0.0
         },
         member_count: db.member_count.unwrap_or(0),
+        is_private: db.is_private,
+        total_current_value: db.total_current_value.unwrap_or(0),
+        total_cost_basis: db.total_cost_basis.unwrap_or(0),
+        asset_count: db.asset_count.unwrap_or(0),
+        period_start_day: db.period_start_day.unwrap_or(1),
+        timezone: db
+            .timezone
+            .unwrap_or_else(|| crate::manager::validate::DEFAULT_TIMEZONE.to_string()),
+        status: db.status,
     }
 }
 

@@ -1,14 +1,18 @@
 use axum::{routing::get, Json, Router};
+use budget::handler::debt::DebtHandler;
 use budget::handler::portfolio::PortfolioHandler;
 use budget::handler::BudgetHandler;
+use budget::manager::biz::debt::DebtBiz;
 use budget::manager::biz::portfolio::biz::PortfolioBiz;
 use budget::manager::biz::portfolio::refresh::RefreshJob;
 use budget::manager::biz::BudgetBiz;
 use budget::manager::client::IdentityClient;
+use budget::manager::repository::debt::DebtRepository;
 use budget::manager::repository::fx_rates::FxRateService;
 use budget::manager::repository::portfolio::PortfolioRepository;
 use budget::manager::repository::BudgetRepository;
 use budget::pb::service::budget::budget_service_server::BudgetServiceServer;
+use budget::pb::service::debt::debt_service_server::DebtServiceServer;
 use budget::pb::service::portfolio::portfolio_service_server::PortfolioServiceServer;
 use std::{net::SocketAddr, sync::Arc};
 
@@ -57,8 +61,17 @@ async fn main() -> anyhow::Result<()> {
     let identity_client = IdentityClient::from_channel(identity_channel);
     tracing::info!("Identity gRPC client connected to {}", identity_url);
 
-    let biz = Arc::new(BudgetBiz::new(repo, config.clone(), identity_client));
-    let grpc_handler = BudgetHandler::new(biz.clone());
+    let category_url =
+        std::env::var("CATEGORY_GRPC_URL").unwrap_or_else(|_| "http://127.0.0.1:50104".to_string());
+    let biz = Arc::new(
+        BudgetBiz::new(repo, config.clone(), identity_client)
+            .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
+                &category_url,
+            )?)
+            .with_entry_client(entry_client()?),
+    );
+
+    // Wire Portfolio service in front of the same Budget repository pool.
 
     // Wire Portfolio service in front of the same Budget repository pool.
     // The identity client and BudgetBiz are shared so role resolution uses
@@ -72,28 +85,75 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
     );
-    let portfolio_biz = Arc::new(PortfolioBiz::new(
-        (*portfolio_repo).clone(),
-        IdentityClient::from_channel(
-            philand_application::connect::connect_default(&identity_url)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
-                })?,
-        ),
-        biz.clone(),
-        fx_svc.clone(),
-    ));
-    let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
+    let portfolio_biz = Arc::new(
+        PortfolioBiz::new(
+            (*portfolio_repo).clone(),
+            IdentityClient::from_channel(
+                philand_application::connect::connect_default(&identity_url)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
+                    })?,
+            ),
+            biz.clone(),
+            fx_svc.clone(),
+        )
+        .with_entry_client(entry_client()?),
+    );
+    let grpc_handler = BudgetHandler::new(biz.clone(), portfolio_biz.clone());
+    spawn_fund_reconcile(portfolio_biz.clone());
 
     // Reuse the same pool for the scheduled refresh job.
-    let portfolio_refresh_repo = portfolio_repo.clone();
+
+    // Wire Portfolio service in front of the same Budget repository pool.
+    // The identity client and BudgetBiz are shared so role resolution uses
+    // the same logic as the existing service.
+    let portfolio_pool = sqlx::MySqlPool::connect(&config.database_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open portfolio pool: {e}"))?;
+    let portfolio_repo = Arc::new(PortfolioRepository::new(portfolio_pool.clone()));
+    let fx_svc = Arc::new(
+        FxRateService::new(portfolio_pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to init FX rate service: {e}"))?,
+    );
+    let portfolio_biz = Arc::new(
+        PortfolioBiz::new(
+            (*portfolio_repo).clone(),
+            IdentityClient::from_channel(
+                philand_application::connect::connect_default(&identity_url)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to connect to identity gRPC (portfolio): {e}")
+                    })?,
+            ),
+            biz.clone(),
+            fx_svc.clone(),
+        )
+        .with_entry_client(entry_client()?),
+    );
+    let portfolio_handler = PortfolioHandler::new(portfolio_biz.clone());
+
+    // Debt book (plan 2026-11-04): same pool, entry client for the payment saga.
+    let debt_pool = sqlx::MySqlPool::connect(&config.database_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open debt pool: {e}"))?;
+    let debt_biz = Arc::new(DebtBiz::new(
+        DebtRepository::new(debt_pool),
+        biz.clone(),
+        Some(entry_client()?),
+    ));
+    spawn_debt_reconcile(debt_biz.clone());
+    let debt_handler = DebtHandler::new(debt_biz);
+
+    // Reuse the same pool for the scheduled refresh job.
 
     // gRPC server
     let grpc_addr: SocketAddr = format!("{}:{}", config.grpc_host, config.grpc_port).parse()?;
     let grpc_server = tonic::transport::Server::builder()
         .add_service(BudgetServiceServer::new(grpc_handler))
         .add_service(PortfolioServiceServer::new(portfolio_handler))
+        .add_service(DebtServiceServer::new(debt_handler))
         .serve(grpc_addr);
     tracing::info!("gRPC server listening on {}", grpc_addr);
 
@@ -109,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     // Scheduled price refresh job. Reads its interval from
     // PORTFOLIO_REFRESH_INTERVAL_SECS. Provider flags (e.g.
     // PORTFOLIO_ENABLE_SJC) are evaluated once at startup.
-    let refresh = RefreshJob::new(portfolio_refresh_repo.clone());
+    let refresh = RefreshJob::new(portfolio_repo.clone());
     tracing::info!(
         "Portfolio refresh job scheduled (interval = {}s)",
         refresh.interval_secs
@@ -164,4 +224,41 @@ async fn main() -> anyhow::Result<()> {
 
 pub async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "service": "budget" }))
+}
+
+/// Entry service client for the fund transfer saga. Lazy: budget and entry call each other.
+fn entry_client() -> anyhow::Result<budget::manager::client::EntryClient> {
+    let url =
+        std::env::var("ENTRY_GRPC_URL").unwrap_or_else(|_| "http://127.0.0.1:50105".to_string());
+    budget::manager::client::EntryClient::connect_lazy(&url)
+}
+
+/// Rolls back fund transfers left half-done by a crash (older than 5 minutes), every 10 minutes.
+fn spawn_fund_reconcile(biz: Arc<PortfolioBiz>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+        loop {
+            tick.tick().await;
+            match biz.reconcile_stale_fund_transfers(300).await {
+                Ok(0) => {}
+                Ok(n) => tracing::warn!("fund reconcile rolled back {n} stale transfer(s)"),
+                Err(e) => tracing::error!("fund reconcile failed: {e}"),
+            }
+        }
+    });
+}
+
+/// Rolls back debt payments left half-done by a crash (older than 5 minutes), every 10 minutes.
+fn spawn_debt_reconcile(biz: Arc<DebtBiz>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+        loop {
+            tick.tick().await;
+            match biz.reconcile_stale_payments(300).await {
+                Ok(0) => {}
+                Ok(n) => tracing::warn!("debt reconcile rolled back {n} stale payment(s)"),
+                Err(e) => tracing::error!("debt reconcile failed: {e}"),
+            }
+        }
+    });
 }

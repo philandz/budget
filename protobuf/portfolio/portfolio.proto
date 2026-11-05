@@ -118,6 +118,14 @@ enum PriceFreshness {
   PRICE_FRESHNESS_UNPRICED = 3;
 }
 
+// Where the money for a purchase comes from (or where proceeds go). UNSPECIFIED keeps the
+// pre-fund behaviour: the cash pocket is not touched.
+enum FundingSource {
+  FUNDING_SOURCE_UNSPECIFIED = 0;
+  FUNDING_SOURCE_CASH_POCKET = 1;
+  FUNDING_SOURCE_EXTERNAL    = 2;
+}
+
 enum ActivityType {
   ACTIVITY_TYPE_UNSPECIFIED = 0;
   ACTIVITY_TYPE_CREATED = 1;
@@ -324,6 +332,19 @@ message PortfolioSummary {
   repeated ValuatedAsset assets = 8;
 }
 
+/// Identical to PortfolioSummary — used by the budget service's
+/// RefreshPortfolio RPC to return the post-refresh state.
+message PortfolioSnapshot {
+  string budget_id = 1;
+  int64 total_current_value = 2;
+  int64 total_open_cost_basis = 3;
+  int64 total_realized_pnl = 4;
+  int64 total_unrealized_pnl = 5;
+  double total_return_pct = 6;
+  string currency = 7;
+  repeated ValuatedAsset assets = 8;
+}
+
 // ---------------------------------------------------------------------------
 // Request/response messages
 // ---------------------------------------------------------------------------
@@ -342,6 +363,7 @@ message CreateSavingsAccountRequest {
   int64 opened_on = 11;
   string notes = 12;
   string idempotency_key = 13;
+  FundingSource funding_source = 14;
 }
 
 message CreateFixedDepositRequest {
@@ -360,6 +382,7 @@ message CreateFixedDepositRequest {
   string certificate_reference_masked = 13;
   string notes = 14;
   string idempotency_key = 15;
+  FundingSource funding_source = 16;
 }
 
 message CreateGoldLotRequest {
@@ -377,6 +400,7 @@ message CreateGoldLotRequest {
   int64 purchase_date = 12;
   string notes = 13;
   string idempotency_key = 14;
+  FundingSource funding_source = 15;
 }
 
 message CreateStockLotRequest {
@@ -475,6 +499,7 @@ message RecordFixedDepositMaturityRequest {
   int64 settlement_date = 4;
   string notes = 5;
   string idempotency_key = 6;
+  FundingSource funding_source = 7;
 }
 
 message RecordFixedDepositRolloverRequest {
@@ -485,6 +510,7 @@ message RecordFixedDepositRolloverRequest {
   int64 new_maturity_date = 5;
   string new_display_name = 6;
   string idempotency_key = 7;
+  FundingSource funding_source = 8;
 }
 
 message RecordGoldDisposalRequest {
@@ -496,6 +522,7 @@ message RecordGoldDisposalRequest {
   int64 disposal_date = 6;
   string notes = 7;
   string idempotency_key = 8;
+  FundingSource funding_source = 9;
 }
 
 message RecordStockDisposalRequest {
@@ -606,6 +633,99 @@ message PortfolioTransfer {
 }
 
 // ---------------------------------------------------------------------------
+// Fund (saving budget): cash pocket + holdings (plan R2)
+// ---------------------------------------------------------------------------
+
+enum FundCashMovementKind {
+  FUND_CASH_MOVEMENT_KIND_UNSPECIFIED = 0;
+  FUND_CASH_MOVEMENT_KIND_OPENING_BALANCE = 1;
+  FUND_CASH_MOVEMENT_KIND_TRANSFER_IN = 2;
+  FUND_CASH_MOVEMENT_KIND_TRANSFER_OUT = 3;
+  FUND_CASH_MOVEMENT_KIND_ASSET_PURCHASE = 4;
+  FUND_CASH_MOVEMENT_KIND_ASSET_REDEMPTION = 5;
+  FUND_CASH_MOVEMENT_KIND_INTEREST_PAYOUT = 6;
+  FUND_CASH_MOVEMENT_KIND_FEE = 7;
+  FUND_CASH_MOVEMENT_KIND_ADJUSTMENT = 8;
+}
+
+message FundCashMovement {
+  string id = 1;
+  string budget_id = 2;
+  FundCashMovementKind kind = 3;
+  int64 amount_minor = 4;       // signed: + into the pocket, - out of it
+  string ref_type = 5;          // portfolio_asset | portfolio_transfer | legacy_entries
+  string ref_id = 6;
+  string transfer_group_id = 7;
+  string actor_user_id = 8;
+  string note = 9;
+  string occurred_on = 10;      // YYYY-MM-DD
+  int64 created_at = 11;
+}
+
+message AllocationSlice {
+  string label = 1;             // asset class name or "cash"
+  int64 value = 2;
+  double pct = 3;
+}
+
+message UpcomingMaturity {
+  string asset_id = 1;
+  string display_name = 2;
+  int64 maturity_date = 3;      // unix seconds
+  int64 expected_amount = 4;
+}
+
+message GetFundSummaryRequest { string budget_id = 1; }
+
+message FundSummary {
+  string budget_id = 1;
+  string currency = 2;
+  int64 cash_balance = 3;
+  int64 holdings_value = 4;
+  int64 total_value = 5;        // cash + holdings
+  int64 net_contributed = 6;    // opening + deposits - withdrawals
+  int64 growth = 7;             // total_value - net_contributed
+  double growth_pct = 8;        // growth / net_contributed (0 when net_contributed <= 0)
+  repeated AllocationSlice allocation = 9;
+  repeated UpcomingMaturity upcoming = 10;  // next 90 days
+  PriceFreshness worst_freshness = 11;
+}
+
+message ListFundCashMovementsRequest {
+  string budget_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListFundCashMovementsResponse {
+  repeated FundCashMovement movements = 1;
+  int32 total_rows = 2;
+}
+
+message FundTransferRequest {
+  string budget_id = 1;                 // the fund
+  string counterparty_budget_id = 2;    // the standard budget on the other side
+  int64 amount_minor = 3;
+  string occurred_on = 4;               // YYYY-MM-DD
+  string note = 5;
+  string idempotency_key = 6;           // required
+}
+
+message FundTransferResponse {
+  FundCashMovement movement = 1;
+  int64 cash_balance = 2;
+  string transfer_group_id = 3;
+}
+
+message AdjustFundCashRequest {
+  string budget_id = 1;
+  int64 amount_minor = 2;               // signed, non-zero
+  string note = 3;                      // required
+  string occurred_on = 4;
+  string idempotency_key = 5;           // required
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -680,5 +800,22 @@ service PortfolioService {
   // Transfers (Phase 3.1)
   rpc CreateTransfer(CreatePortfolioTransferRequest) returns (CreatePortfolioTransferResponse) {
     option (google.api.http) = { post: "/budgets/{source_budget_id}/portfolio/transfers" body: "*" };
+  }
+
+  // Fund (saving budget) — cash pocket and summary
+  rpc GetFundSummary(GetFundSummaryRequest) returns (FundSummary) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/fund/summary" };
+  }
+  rpc ListFundCashMovements(ListFundCashMovementsRequest) returns (ListFundCashMovementsResponse) {
+    option (google.api.http) = { get: "/budgets/{budget_id}/fund/cash-movements" };
+  }
+  rpc DepositToFund(FundTransferRequest) returns (FundTransferResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/fund/deposit" body: "*" };
+  }
+  rpc WithdrawFromFund(FundTransferRequest) returns (FundTransferResponse) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/fund/withdraw" body: "*" };
+  }
+  rpc AdjustFundCash(AdjustFundCashRequest) returns (FundCashMovement) {
+    option (google.api.http) = { post: "/budgets/{budget_id}/fund/adjust" body: "*" };
   }
 }

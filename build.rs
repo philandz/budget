@@ -30,12 +30,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let files = [
         format!("{proto_prefix}/budget/budget.proto"),
         format!("{proto_prefix}/portfolio/portfolio.proto"),
+        format!("{proto_prefix}/debt/debt.proto"),
+        format!("{proto_prefix}/entry/entry.proto"),
+        format!("{proto_prefix}/category/category.proto"),
         format!("{proto_prefix}/identity/identity.proto"),
         format!("{proto_prefix}/shared/user/user.proto"),
         format!("{proto_prefix}/shared/organization/organization.proto"),
         format!("{libs_prefix}/protobuf/common/base.proto"),
     ];
     let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+
+    // The proto sources live OUTSIDE this package (they are shared through the
+    // sibling `protobuf/` repo), so Cargo would not re-run this build script
+    // when they change and the generated code would silently go stale.
+    for f in &file_refs {
+        println!("cargo:rerun-if-changed={f}");
+    }
 
     tonic_build::configure()
         .build_server(true)

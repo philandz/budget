@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
+use crate::manager::biz::portfolio::biz::PortfolioBiz;
 use crate::manager::biz::BudgetBiz;
 use crate::manager::validate;
 use crate::pb::service::budget::{
@@ -8,27 +9,30 @@ use crate::pb::service::budget::{
     AddPriceSnapshotRequest, BudgetRole, BudgetType, CheckRoleRequest, CheckRoleResponse,
     CreateBudgetRequest, CreateBudgetResponse, CreateInvestAssetRequest, DeleteBudgetRequest,
     DeleteBudgetResponse, DeleteInvestAssetRequest, DeleteInvestAssetResponse,
-    GetBudgetAdminRequest, GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse,
-    GetBurnRateRequest, GetBurnRateResponse, GetInvestPortfolioSummaryRequest,
-    GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest, GetRolloverPolicyResponse,
-    InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
+    ForceCloseBudgetRequest, ForceCloseBudgetResponse, GetBudgetAdminRequest,
+    GetBudgetAdminResponse, GetBudgetRequest, GetBudgetResponse, GetBudgetStatusRequest,
+    GetBudgetStatusResponse, GetBurnRateRequest, GetBurnRateResponse,
+    GetInvestPortfolioSummaryRequest, GetLatestPriceSnapshotRequest, GetRolloverPolicyRequest,
+    GetRolloverPolicyResponse, InvestAsset, InvestPortfolioSummary, ListBudgetMembersAdminRequest,
     ListBudgetMembersAdminResponse, ListBudgetMembersRequest, ListBudgetMembersResponse,
     ListBudgetsAdminRequest, ListBudgetsAdminResponse, ListBudgetsRequest, ListBudgetsResponse,
     ListInvestAssetsRequest, ListInvestAssetsResponse, ListPriceSnapshotsRequest,
-    ListPriceSnapshotsResponse, ListTemplatesRequest, ListTemplatesResponse, PriceSnapshot,
-    RemoveBudgetMemberRequest, RemoveBudgetMemberResponse, SetEnvelopeLimitRequest,
-    SetEnvelopeLimitResponse, SetRolloverPolicyRequest, SetRolloverPolicyResponse,
-    UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse, UpdateBudgetRequest,
-    UpdateBudgetResponse, UpdateInvestAssetRequest,
+    ListPriceSnapshotsResponse, ListTemplatesRequest, ListTemplatesResponse, PortfolioSnapshot,
+    PriceSnapshot, RefreshPortfolioRequest, RefreshPortfolioResponse, RemoveBudgetMemberRequest,
+    RemoveBudgetMemberResponse, SetBudgetStatusRequest, SetBudgetStatusResponse,
+    SetEnvelopeLimitRequest, SetEnvelopeLimitResponse, SetRolloverPolicyRequest,
+    SetRolloverPolicyResponse, UpdateBudgetMemberRoleRequest, UpdateBudgetMemberRoleResponse,
+    UpdateBudgetRequest, UpdateBudgetResponse, UpdateInvestAssetRequest,
 };
 
 pub struct BudgetHandler {
     biz: Arc<BudgetBiz>,
+    portfolio_biz: Arc<PortfolioBiz>,
 }
 
 impl BudgetHandler {
-    pub fn new(biz: Arc<BudgetBiz>) -> Self {
-        Self { biz }
+    pub fn new(biz: Arc<BudgetBiz>, portfolio_biz: Arc<PortfolioBiz>) -> Self {
+        Self { biz, portfolio_biz }
     }
 }
 
@@ -41,7 +45,9 @@ impl BudgetService for BudgetHandler {
         let user_id = validate::user_id_from_metadata(request.metadata())?;
         let req = request.into_inner();
         let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Standard);
-        let budget = self
+        // validate before creating so a bad value never leaves a half-configured budget
+        validate::period_settings(req.period_start_day, req.timezone.as_deref())?;
+        let mut budget = self
             .biz
             .create_budget(
                 &user_id,
@@ -56,6 +62,35 @@ impl BudgetService for BudgetHandler {
                 },
             )
             .await?;
+        self.biz
+            .seed_new_budget(
+                &user_id,
+                &budget,
+                if req.template_id.is_empty() {
+                    None
+                } else {
+                    Some(&req.template_id)
+                },
+                &req.locale,
+                req.expected_income,
+            )
+            .await;
+        if req.period_start_day.is_some() || req.timezone.is_some() {
+            let id = budget
+                .base
+                .as_ref()
+                .map(|b| b.id.clone())
+                .unwrap_or_default();
+            self.biz
+                .apply_period(&user_id, &id, req.period_start_day, req.timezone.as_deref())
+                .await?;
+            if let Some(d) = req.period_start_day {
+                budget.period_start_day = d;
+            }
+            if let Some(tz) = req.timezone.clone().filter(|t| !t.trim().is_empty()) {
+                budget.timezone = tz;
+            }
+        }
         Ok(Response::new(CreateBudgetResponse {
             budget: Some(budget),
         }))
@@ -111,17 +146,36 @@ impl BudgetService for BudgetHandler {
         let user_type = validate::user_type_from_metadata(request.metadata());
         let req = request.into_inner();
         validate::budget_name(&req.name)?;
-        let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Standard);
-        let budget = self
+        // Unspecified/unknown means "keep the current type" (it is immutable).
+        let budget_type = BudgetType::try_from(req.budget_type).unwrap_or(BudgetType::Unspecified);
+        validate::period_settings(req.period_start_day, req.timezone.as_deref())?;
+        let mut budget = self
             .biz
             .update_budget(
                 &user_id,
                 &req.budget_id,
                 &req.name,
                 budget_type,
+                req.is_private,
                 user_type.as_deref(),
             )
             .await?;
+        if req.period_start_day.is_some() || req.timezone.is_some() {
+            self.biz
+                .apply_period(
+                    &user_id,
+                    &req.budget_id,
+                    req.period_start_day,
+                    req.timezone.as_deref(),
+                )
+                .await?;
+            if let Some(d) = req.period_start_day {
+                budget.period_start_day = d;
+            }
+            if let Some(tz) = req.timezone.clone().filter(|t| !t.trim().is_empty()) {
+                budget.timezone = tz;
+            }
+        }
         Ok(Response::new(UpdateBudgetResponse {
             budget: Some(budget),
         }))
@@ -138,6 +192,47 @@ impl BudgetService for BudgetHandler {
             .delete_budget(&user_id, &req.budget_id, user_type.as_deref())
             .await?;
         Ok(Response::new(DeleteBudgetResponse { success: true }))
+    }
+
+    async fn force_close_budget(
+        &self,
+        request: Request<ForceCloseBudgetRequest>,
+    ) -> Result<Response<ForceCloseBudgetResponse>, Status> {
+        let req = request.into_inner();
+        let budget = self.biz.force_close_budget(&req.budget_id).await?;
+        Ok(Response::new(ForceCloseBudgetResponse {
+            budget: Some(budget),
+        }))
+    }
+
+    async fn set_budget_status(
+        &self,
+        request: Request<SetBudgetStatusRequest>,
+    ) -> Result<Response<SetBudgetStatusResponse>, Status> {
+        let user_id = validate::user_id_from_metadata(request.metadata())?;
+        let req = request.into_inner();
+        let budget = self
+            .biz
+            .set_budget_status(&user_id, &req.budget_id, &req.status)
+            .await?;
+        Ok(Response::new(SetBudgetStatusResponse {
+            budget: Some(budget),
+        }))
+    }
+
+    async fn get_budget_status(
+        &self,
+        request: Request<GetBudgetStatusRequest>,
+    ) -> Result<Response<GetBudgetStatusResponse>, Status> {
+        let req = request.into_inner();
+        // Status + type only: this RPC is on the write-guard path, so it must
+        // not depend on the Entry service.
+        let (status, budget_type) = self.biz.get_budget_status(&req.budget_id).await?;
+        Ok(Response::new(GetBudgetStatusResponse {
+            status,
+            // The generated field is the enum's i32 discriminant.
+            budget_type: budget_type as i32,
+        }))
     }
 
     async fn list_budgets(
@@ -188,9 +283,34 @@ impl BudgetService for BudgetHandler {
             .biz
             .check_role(&req.user_id, &req.budget_id, user_type.as_deref())
             .await?;
+        // Budget context for callers that need it (entry transfers). Only for members,
+        // so a non-member learns nothing about the budget.
+        let (org_id, currency, budget_type, name, period_start_day, timezone) = if is_member {
+            match self.biz.repo.get_budget_by_id(&req.budget_id).await {
+                Ok(b) => (
+                    b.org_id.clone(),
+                    b.currency.clone(),
+                    crate::converters::budget_type_from_db(&b.budget_type) as i32,
+                    b.name.clone(),
+                    b.period_start_day.unwrap_or(1),
+                    b.timezone
+                        .clone()
+                        .unwrap_or_else(|| validate::DEFAULT_TIMEZONE.to_string()),
+                ),
+                Err(_) => Default::default(),
+            }
+        } else {
+            Default::default()
+        };
         Ok(Response::new(CheckRoleResponse {
             role: role as i32,
             is_member,
+            org_id,
+            currency,
+            budget_type,
+            name,
+            period_start_day,
+            timezone,
         }))
     }
 
@@ -438,6 +558,32 @@ impl BudgetService for BudgetHandler {
         Ok(Response::new(summary))
     }
 
+    async fn refresh_portfolio(
+        &self,
+        request: Request<RefreshPortfolioRequest>,
+    ) -> Result<Response<RefreshPortfolioResponse>, Status> {
+        let caller_id = validate::user_id_from_metadata(request.metadata())?;
+        let user_type = validate::user_type_from_metadata(request.metadata());
+        let req = request.into_inner();
+        let portfolio_snapshot = self
+            .portfolio_biz
+            .refresh_portfolio(&caller_id, &req.budget_id, user_type.as_deref())
+            .await?;
+        // Map from portfolio-proto PortfolioSnapshot to budget-proto PortfolioSnapshot.
+        let snapshot = PortfolioSnapshot {
+            budget_id: portfolio_snapshot.budget_id,
+            total_current_value: portfolio_snapshot.total_current_value,
+            total_open_cost_basis: portfolio_snapshot.total_open_cost_basis,
+            total_realized_pnl: portfolio_snapshot.total_realized_pnl,
+            total_unrealized_pnl: portfolio_snapshot.total_unrealized_pnl,
+            total_return_pct: portfolio_snapshot.total_return_pct,
+            currency: portfolio_snapshot.currency,
+        };
+        Ok(Response::new(RefreshPortfolioResponse {
+            snapshot: Some(snapshot),
+        }))
+    }
+
     async fn add_price_snapshot(
         &self,
         request: Request<AddPriceSnapshotRequest>,
@@ -488,4 +634,5 @@ impl BudgetService for BudgetHandler {
     }
 }
 
+pub mod debt;
 pub mod portfolio;
