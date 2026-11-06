@@ -102,6 +102,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn supports_returns_false_when_disabled() {
         std::env::remove_var("PORTFOLIO_ENABLE_HNX");
         assert!(!HnxProvider::new().supports(&stock_asset(pb::StockExchange::Hnx as i32)));
