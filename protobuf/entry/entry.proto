@@ -91,6 +91,17 @@ message ListParams {
   repeated string category_ids = 13;
   // User IDs of entry creators. Multiple IDs use OR semantics.
   repeated string member_ids   = 14;
+  // When true the response carries totals over the WHOLE filtered set, not just the page.
+  optional bool include_summary = 15;
+}
+
+// Totals over every row matching the list filters (ignores paging).
+message ListSummary {
+  int64 count        = 1;
+  int64 income       = 2;
+  int64 expense      = 3;
+  int64 transfer_in  = 4;
+  int64 transfer_out = 5;
 }
 
 message PageMeta {
@@ -143,6 +154,7 @@ message ListEntriesRequest  {
 message ListEntriesResponse {
   repeated Entry entries = 1;
   PageMeta meta = 2;
+  optional ListSummary summary = 3;
 }
 
 // ---------------------------------------------------------------------------
