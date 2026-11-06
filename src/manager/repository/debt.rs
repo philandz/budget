@@ -28,6 +28,37 @@ pub enum DebtRepoError {
     Db(#[from] sqlx::Error),
 }
 
+/// Optional filters for `list_payments`; empty means "no filter".
+#[derive(Debug, Default, Clone)]
+pub struct PaymentFilter {
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    pub kind: Option<String>,
+}
+
+/// SQL fragment (starting with " AND ...") and its binds, in order. Values are only ever bound.
+pub fn payment_conditions(account_id: Option<&str>, f: &PaymentFilter) -> (String, Vec<String>) {
+    let mut cond = String::new();
+    let mut binds = Vec::new();
+    if let Some(a) = account_id {
+        cond.push_str(" AND account_id = ?");
+        binds.push(a.to_string());
+    }
+    if let Some(d) = f.date_from.as_deref() {
+        cond.push_str(" AND paid_on >= ?");
+        binds.push(d.to_string());
+    }
+    if let Some(d) = f.date_to.as_deref() {
+        cond.push_str(" AND paid_on <= ?");
+        binds.push(d.to_string());
+    }
+    if let Some(k) = f.kind.as_deref() {
+        cond.push_str(" AND kind = ?");
+        binds.push(k.to_string());
+    }
+    (cond, binds)
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct DbDebtAccount {
     pub id: String,
@@ -1052,29 +1083,26 @@ impl DebtRepository {
         &self,
         budget_id: &str,
         account_id: Option<&str>,
+        filter: &PaymentFilter,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<DbDebtPayment>, i64), sqlx::Error> {
-        let cond = if account_id.is_some() {
-            " AND account_id = ?"
-        } else {
-            ""
-        };
+        let (cond, binds) = payment_conditions(account_id, filter);
         let sql = format!(
             "SELECT {PAYMENT_COLS} FROM debt_payments WHERE budget_id = ? AND status = 'completed'{cond}
-             ORDER BY paid_on DESC, created_at DESC LIMIT ? OFFSET ?"
+             ORDER BY paid_on DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
         );
         let mut q = sqlx::query_as::<_, DbDebtPayment>(&sql).bind(budget_id);
-        if let Some(a) = account_id {
-            q = q.bind(a);
+        for b in &binds {
+            q = q.bind(b);
         }
         let rows = q.bind(limit).bind(offset).fetch_all(&self.pool).await?;
         let csql = format!(
             "SELECT COUNT(*) FROM debt_payments WHERE budget_id = ? AND status = 'completed'{cond}"
         );
         let mut c = sqlx::query_scalar::<_, i64>(&csql).bind(budget_id);
-        if let Some(a) = account_id {
-            c = c.bind(a);
+        for b in &binds {
+            c = c.bind(b);
         }
         Ok((rows, c.fetch_one(&self.pool).await?))
     }
@@ -1198,4 +1226,31 @@ async fn insert_rule(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod payment_filter_tests {
+    use super::*;
+
+    #[test]
+    fn no_filter_adds_nothing() {
+        let (c, b) = payment_conditions(None, &PaymentFilter::default());
+        assert!(c.is_empty() && b.is_empty());
+    }
+
+    #[test]
+    fn filters_bind_in_order_and_never_inline_values() {
+        let f = PaymentFilter {
+            date_from: Some("2026-01-01".into()),
+            date_to: Some("2026-06-30".into()),
+            kind: Some("prepayment".into()),
+        };
+        let (c, b) = payment_conditions(Some("acc"), &f);
+        assert_eq!(
+            c,
+            " AND account_id = ? AND paid_on >= ? AND paid_on <= ? AND kind = ?"
+        );
+        assert_eq!(b, vec!["acc", "2026-01-01", "2026-06-30", "prepayment"]);
+        assert!(!c.contains("prepayment") && !c.contains("2026"));
+    }
 }

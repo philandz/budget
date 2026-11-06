@@ -67,6 +67,47 @@ fn date_arg(field: &str, v: &str) -> Result<NaiveDate, Status> {
         .ok_or_else(|| Status::invalid_argument(format!("{field} must be YYYY-MM-DD")))
 }
 
+/// Longest payment-list window a client may ask for.
+const PAYMENT_LIST_MAX_DAYS: i64 = 366;
+
+/// Validate the optional date range and kind of a ListDebtPayments request.
+fn payment_filter(req: &pb::ListDebtPaymentsRequest) -> Result<PaymentFilter, Status> {
+    let from = match req.date_from.as_deref().filter(|s| !s.is_empty()) {
+        Some(v) => Some(date_arg("date_from", v)?),
+        None => None,
+    };
+    let to = match req.date_to.as_deref().filter(|s| !s.is_empty()) {
+        Some(v) => Some(date_arg("date_to", v)?),
+        None => None,
+    };
+    if let (Some(f), Some(t)) = (from, to) {
+        if f > t {
+            return Err(Status::invalid_argument(
+                "date_from must not be after date_to",
+            ));
+        }
+        if (t - f).num_days() + 1 > PAYMENT_LIST_MAX_DAYS {
+            return Err(Status::invalid_argument(format!(
+                "date range must not exceed {PAYMENT_LIST_MAX_DAYS} days"
+            )));
+        }
+    }
+    let kind = match req.kind.as_deref().filter(|s| !s.is_empty()) {
+        None => None,
+        Some(k @ ("scheduled" | "prepayment" | "settlement")) => Some(k.to_string()),
+        Some(_) => {
+            return Err(Status::invalid_argument(
+                "kind must be scheduled, prepayment or settlement",
+            ))
+        }
+    };
+    Ok(PaymentFilter {
+        date_from: from.map(|d| d.format("%Y-%m-%d").to_string()),
+        date_to: to.map(|d| d.format("%Y-%m-%d").to_string()),
+        kind,
+    })
+}
+
 /// `fee_pct` is stored as DECIMAL(7,4): at most four decimals.
 fn fee_pct_arg(v: &str) -> Result<String, Status> {
     let micro = sch::parse_pct(v)
@@ -1610,11 +1651,13 @@ impl DebtBiz {
         self.assert_role(&req.budget_id, user_id, BudgetRole::Viewer, user_type)
             .await?;
         let (limit, offset) = Self::page(req.page, req.page_size);
+        let filter = payment_filter(&req)?;
         let (rows, total) = self
             .repo
             .list_payments(
                 &req.budget_id,
                 opt(&req.account_id).as_deref(),
+                &filter,
                 limit,
                 offset,
             )
