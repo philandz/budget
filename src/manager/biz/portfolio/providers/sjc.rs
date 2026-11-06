@@ -126,6 +126,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn supports_returns_false_when_disabled() {
         std::env::remove_var("PORTFOLIO_ENABLE_SJC");
         assert!(!SjcProvider::new().supports(&gold_asset(pb::GoldPurity::Sjc9999 as i32)));

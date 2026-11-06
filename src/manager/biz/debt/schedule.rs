@@ -542,3 +542,17 @@ pub fn current_installment(method: Method, rows: &[Row]) -> Option<i64> {
         _ => None,
     }
 }
+
+/// The instalment a "reduce term" prepayment keeps: the one fixed earlier, otherwise the next
+/// instalment of the schedule as it stands. The quote and the recorded payment both call this, so
+/// what the user is shown is what gets stored.
+pub fn installment_to_keep(i: &Inputs) -> Option<i64> {
+    if let Some(v) = i.fixed_installment.filter(|v| *v > 0) {
+        return Some(v);
+    }
+    // The whole remaining schedule: an annuity instalment depends on how many periods are left, so
+    // projecting only the next few rows would re-amortise the balance over those rows alone.
+    let mut full = i.clone();
+    full.max_rows = MAX_ROWS;
+    current_installment(i.method, &project(&full).rows)
+}

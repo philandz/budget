@@ -410,3 +410,90 @@ fn no_rule_means_no_fee_and_the_latest_valid_rule_wins() {
     };
     assert!(!prepay_fee(&[gap], d("2026-05-10"), 0, 10_000_000).has_rule);
 }
+
+// ---------------------------------------------------------------------------
+// Regression: "reduce term" prepayment must keep the instalment of the FULL schedule.
+// Projecting only the next couple of rows re-amortises the balance over those rows and
+// produced an instalment ~3.5x too large (31_316_520 instead of ~8_884_879).
+// ---------------------------------------------------------------------------
+
+/// 100m, 12 %/yr, actual/365, due on the 5th, 12 periods; the first instalment (05/12/2026) is paid.
+fn loan_after_first_instalment(rates: &[Rate]) -> Inputs<'_> {
+    Inputs {
+        method: Method::Annuity,
+        day_count: DayCount::Actual365,
+        outstanding: 92_101_422,
+        interest_through: d("2026-12-05"),
+        last_due: Some(d("2026-12-05")),
+        due_day: 5,
+        maturity: Some(d("2027-11-05")),
+        rates,
+        periodic_fee: 0,
+        fixed_installment: None,
+        max_rows: 600,
+    }
+}
+
+#[test]
+fn the_first_instalment_of_the_reference_loan_is_8_884_879() {
+    let rates = [fixed("2026-11-05", "12")];
+    let mut i = loan_after_first_instalment(&rates);
+    i.outstanding = 100_000_000;
+    i.interest_through = d("2026-11-05");
+    i.last_due = None;
+    let s = project(&i);
+    assert_eq!(s.rows.len(), 12);
+    assert_eq!(s.rows[0].due_date, d("2026-12-05"));
+    assert_eq!(s.rows[0].principal, 7_898_578);
+    assert_eq!(s.rows[0].interest, 986_301);
+    assert_eq!(s.rows[0].total, 8_884_879);
+}
+
+#[test]
+fn reduce_term_keeps_the_instalment_of_the_whole_schedule() {
+    let rates = [fixed("2026-11-05", "12")];
+    let before = loan_after_first_instalment(&rates);
+    let kept = installment_to_keep(&before).expect("annuity has an instalment");
+    // 11 periods left on 92_101_422 (actual/365 makes it a hair below the first 8_884_879)
+    assert!((kept - 8_883_558).abs() <= 2_000, "kept {kept}");
+    assert_ne!(kept, 31_316_520, "re-amortised over two rows");
+
+    // what the quote shows for reduce_term, and what the recorded payment must store
+    let mut term = before.clone();
+    term.outstanding -= 10_000_000;
+    term.fixed_installment = Some(kept);
+    let s = project(&term);
+    assert_eq!(s.rows.len(), 10);
+    assert_eq!(s.payoff_date, Some(d("2027-10-05")));
+    assert!(
+        (s.rows[0].total - 8_883_558).abs() <= 2_000,
+        "next due {}",
+        s.rows[0].total
+    );
+}
+
+#[test]
+fn an_instalment_fixed_earlier_is_what_reduce_term_keeps() {
+    let rates = [fixed("2026-11-05", "12")];
+    let mut i = loan_after_first_instalment(&rates);
+    i.fixed_installment = Some(9_000_000);
+    assert_eq!(installment_to_keep(&i), Some(9_000_000));
+}
+
+#[test]
+fn reduce_installment_lowers_the_instalment_and_keeps_the_payoff_date() {
+    let rates = [fixed("2026-11-05", "12")];
+    let before = loan_after_first_instalment(&rates);
+    let mut inst = before.clone();
+    inst.outstanding -= 10_000_000;
+    inst.fixed_installment = None;
+    let s = project(&inst);
+    assert_eq!(s.payoff_date, Some(d("2027-11-05")));
+    assert_eq!(s.rows.len(), 11);
+    assert!(s.rows[0].total < 8_884_879);
+    assert!(
+        (s.rows[0].total - 7_919_017).abs() <= 2_000,
+        "next due {}",
+        s.rows[0].total
+    );
+}

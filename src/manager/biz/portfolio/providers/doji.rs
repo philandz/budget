@@ -111,6 +111,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn supports_returns_false_when_disabled() {
         std::env::remove_var("PORTFOLIO_ENABLE_DOJI");
         assert!(!DojiProvider::new().supports(&gold_asset(pb::GoldPurity::Doji9999 as i32)));

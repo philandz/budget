@@ -357,12 +357,8 @@ impl DebtBiz {
                     };
                     q.taxable = fee.taxable;
                     if kind == "prepayment" && principal < outstanding {
-                        let method = inp.method;
                         let before = sch::project(&inp);
-                        let keep = a
-                            .installment_minor
-                            .filter(|v| *v > 0)
-                            .or_else(|| sch::current_installment(method, &before.rows));
+                        let keep = sch::installment_to_keep(&inp);
                         let mut after = inp.clone();
                         after.outstanding = outstanding - principal;
                         if acc.interest > 0 && paid_on > inp.interest_through {
@@ -1470,17 +1466,13 @@ impl DebtBiz {
             },
             "prepayment" => {
                 let installment = if req.prepay_effect == "reduce_term" {
-                    // keep today's instalment; an instalment fixed earlier stays
-                    match l.acc.installment_minor.filter(|v| *v > 0) {
-                        Some(v) => Some(Some(v)),
-                        None => {
-                            let s = self.project(l, 2);
-                            Some(
-                                Method::parse(&l.acc.repayment_method)
-                                    .and_then(|m| sch::current_installment(m, &s.rows)),
-                            )
-                        }
-                    }
+                    // Keep today's instalment (the same value the quote shows): one fixed earlier
+                    // stays, otherwise the next instalment of the whole remaining schedule.
+                    // The balance falls, the instalment does not, so the term shortens.
+                    Some(
+                        self.inputs(l, sch::MAX_ROWS)
+                            .and_then(|i| sch::installment_to_keep(&i)),
+                    )
                 } else {
                     Some(None)
                 };
