@@ -259,6 +259,10 @@ message ListDebtPaymentsRequest {
   string account_id = 2;  // empty = every account of the book
   int32  page       = 3;
   int32  page_size  = 4;
+  // Optional filters (inclusive YYYY-MM-DD dates, at most 366 days apart).
+  optional string date_from = 5;
+  optional string date_to   = 6;
+  optional string kind      = 7;  // scheduled | prepayment | settlement
 }
 message ListDebtPaymentsResponse {
   repeated DebtPayment payments = 1;
