@@ -265,3 +265,43 @@ async fn sweep_paging_skips_archived_budgets_and_closed_accounts() {
     sorted.sort();
     assert_eq!(ids, sorted, "keyset paging returns ids in order");
 }
+
+// --------------------------------------------------------------------- membership events
+
+mod membership {
+    use budget::manager::notifier::{member_added_event, member_role_changed_event};
+    use budget::pb::service::budget::BudgetRole;
+
+    #[test]
+    fn added_event_targets_the_new_member_and_links_to_the_budget() {
+        let ev = member_added_event("b1", "Family", "u2", Some("u1"), BudgetRole::Contributor);
+        assert_eq!(ev.event_type, "budget.member_added");
+        assert_eq!(ev.recipient_user_ids, vec!["u2"]);
+        assert_eq!(ev.actor_user_id.as_deref(), Some("u1"));
+        assert_eq!(ev.link.as_deref(), Some("/budgets/b1"));
+        assert_eq!(ev.params["budget_name"], "Family");
+        assert_eq!(ev.params["role"], "contributor");
+    }
+
+    #[test]
+    fn nobody_is_notified_about_their_own_action() {
+        let ev = member_added_event("b1", "Family", "u1", Some("u1"), BudgetRole::Viewer);
+        assert!(!ev.has_recipients());
+        let ev = member_role_changed_event("b1", "Family", "u1", Some("u1"), BudgetRole::Manager);
+        assert!(!ev.has_recipients());
+    }
+
+    #[test]
+    fn a_system_actor_add_still_notifies() {
+        let ev = member_added_event("b1", "Family", "u2", None, BudgetRole::Viewer);
+        assert_eq!(ev.recipient_user_ids, vec!["u2"]);
+        assert!(ev.actor_user_id.is_none());
+    }
+
+    #[test]
+    fn role_change_event_carries_the_new_role() {
+        let ev = member_role_changed_event("b1", "Family", "u2", Some("u1"), BudgetRole::Manager);
+        assert_eq!(ev.event_type, "budget.member_role_changed");
+        assert_eq!(ev.params["role"], "manager");
+    }
+}

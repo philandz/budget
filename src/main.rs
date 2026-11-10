@@ -64,13 +64,35 @@ async fn main() -> anyhow::Result<()> {
 
     let category_url =
         std::env::var("CATEGORY_GRPC_URL").unwrap_or_else(|_| "http://127.0.0.1:50104".to_string());
-    let biz = Arc::new(
-        BudgetBiz::new(repo, config.clone(), identity_client)
-            .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
-                &category_url,
-            )?)
-            .with_entry_client(entry_client()?),
-    );
+    // Notifications (plan 2026-11-09): off unless NOTIFY_PUBLISH_ENABLED. When on, the outbox
+    // drainer delivers to the notification service, the daily sweep enqueues debt reminders and
+    // member changes enqueue membership notifications.
+    let (_notify_shutdown_tx, notify_shutdown_rx) = tokio::sync::watch::channel(false);
+    let notify_cfg = philand_configs::NotifyPublisherConfig::from_env()
+        .map_err(|e| anyhow::anyhow!("Failed to load notification publisher config: {e}"))?;
+    let mut notifier = None;
+    let mut notify_outbox = None;
+    if notify_cfg.enabled {
+        let outbox_pool = sqlx::MySqlPool::connect(&config.database_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open notify outbox pool: {e}"))?;
+        let outbox = philand_event::MySqlOutbox::new(outbox_pool.clone(), "budget_notify_outbox")?;
+        notifier = Some(budget::manager::notifier::Notifier::new(
+            outbox.clone(),
+            outbox_pool,
+        ));
+        notify_outbox = Some(outbox);
+    }
+
+    let mut biz_builder = BudgetBiz::new(repo, config.clone(), identity_client)
+        .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
+            &category_url,
+        )?)
+        .with_entry_client(entry_client()?);
+    if let Some(n) = notifier {
+        biz_builder = biz_builder.with_notifier(n);
+    }
+    let biz = Arc::new(biz_builder);
 
     // Wire Portfolio service in front of the same Budget repository pool.
 
@@ -146,16 +168,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     spawn_debt_reconcile(debt_biz.clone());
 
-    // Notifications (plan 2026-11-09): off unless NOTIFY_PUBLISH_ENABLED. The drainer delivers
-    // the outbox to the notification service; the daily sweep enqueues debt reminders.
-    let (_notify_shutdown_tx, notify_shutdown_rx) = tokio::sync::watch::channel(false);
-    let notify_cfg = philand_configs::NotifyPublisherConfig::from_env()
-        .map_err(|e| anyhow::anyhow!("Failed to load notification publisher config: {e}"))?;
-    if notify_cfg.enabled {
-        let outbox_pool = sqlx::MySqlPool::connect(&config.database_url)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to open notify outbox pool: {e}"))?;
-        let outbox = philand_event::MySqlOutbox::new(outbox_pool, "budget_notify_outbox")?;
+    if let Some(outbox) = notify_outbox {
         let sink = Arc::new(GrpcNotificationSink::new(
             &notify_cfg.notification_grpc_url,
             &notify_cfg.internal_token,
