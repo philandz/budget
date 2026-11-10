@@ -365,6 +365,30 @@ impl DebtRepository {
             .ok_or(DebtRepoError::NotFound)
     }
 
+    pub fn pool(&self) -> &MySqlPool {
+        &self.pool
+    }
+
+    /// Active accounts of non-archived budgets with `id > after`, in id order (keyset paging
+    /// for the reminder sweep).
+    pub async fn list_active_after(
+        &self,
+        after: &str,
+        limit: i64,
+    ) -> Result<Vec<DbDebtAccount>, sqlx::Error> {
+        let sql = format!(
+            "SELECT {ACCOUNT_COLS} FROM debt_accounts
+             WHERE id > ? AND status = 'active' AND deleted_at IS NULL
+               AND EXISTS (SELECT 1 FROM budgets b WHERE b.id = BINARY debt_accounts.budget_id AND b.status <> 'archived')
+             ORDER BY id LIMIT ?"
+        );
+        sqlx::query_as::<_, DbDebtAccount>(&sql)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+    }
+
     pub async fn get_account(&self, id: &str) -> Result<Option<DbDebtAccount>, sqlx::Error> {
         let sql =
             format!("SELECT {ACCOUNT_COLS} FROM debt_accounts WHERE id = ? AND deleted_at IS NULL");
