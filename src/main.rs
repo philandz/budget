@@ -6,6 +6,7 @@ use budget::manager::biz::debt::DebtBiz;
 use budget::manager::biz::portfolio::biz::PortfolioBiz;
 use budget::manager::biz::portfolio::refresh::RefreshJob;
 use budget::manager::biz::BudgetBiz;
+use budget::manager::client::notification::GrpcNotificationSink;
 use budget::manager::client::IdentityClient;
 use budget::manager::repository::debt::DebtRepository;
 use budget::manager::repository::fx_rates::FxRateService;
@@ -144,6 +145,41 @@ async fn main() -> anyhow::Result<()> {
         Some(entry_client()?),
     ));
     spawn_debt_reconcile(debt_biz.clone());
+
+    // Notifications (plan 2026-11-09): off unless NOTIFY_PUBLISH_ENABLED. The drainer delivers
+    // the outbox to the notification service; the daily sweep enqueues debt reminders.
+    let (_notify_shutdown_tx, notify_shutdown_rx) = tokio::sync::watch::channel(false);
+    let notify_cfg = philand_configs::NotifyPublisherConfig::from_env()
+        .map_err(|e| anyhow::anyhow!("Failed to load notification publisher config: {e}"))?;
+    if notify_cfg.enabled {
+        let outbox_pool = sqlx::MySqlPool::connect(&config.database_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open notify outbox pool: {e}"))?;
+        let outbox = philand_event::MySqlOutbox::new(outbox_pool, "budget_notify_outbox")?;
+        let sink = Arc::new(GrpcNotificationSink::new(
+            &notify_cfg.notification_grpc_url,
+            &notify_cfg.internal_token,
+        )?);
+        tokio::spawn(philand_event::run_outbox_drainer(
+            Arc::new(outbox.clone()),
+            sink,
+            philand_event::DrainerConfig::from_env(),
+            notify_shutdown_rx,
+        ));
+        let hour = std::env::var("DEBT_REMINDER_HOUR")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|h| *h < 24)
+            .unwrap_or(7);
+        tokio::spawn(budget::manager::biz::debt::reminders::run_daily_reminders(
+            debt_biz.clone(),
+            outbox,
+            hour,
+        ));
+        tracing::info!(
+            "notification publishing enabled (debt reminders daily at {hour:02}:00 Asia/Saigon)"
+        );
+    }
     let debt_handler = DebtHandler::new(debt_biz);
 
     // Reuse the same pool for the scheduled refresh job.
