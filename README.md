@@ -17,6 +17,8 @@ book shows, so amounts are estimates): 3 days before the due date, on the due da
 1 / 7 / 14 days, and 7 days before a scheduled rate change. Each reminder has a deterministic event
 id and `dedup_key`, so restarts, several replicas or a re-run never notify twice.
 
+Member events: `budget.member_added` and `budget.member_role_changed` go to the affected user (never the actor). They are enqueued right after the change is committed and are best-effort (an enqueue failure is logged, not surfaced).
+
 Check the outbox: `SELECT event_type, attempts, last_error FROM budget_notify_outbox WHERE delivered_at IS NULL;`
 Rows that failed permanently or ran out of attempts have `dead_at` set and are kept for inspection.
 
