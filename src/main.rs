@@ -6,6 +6,7 @@ use budget::manager::biz::debt::DebtBiz;
 use budget::manager::biz::portfolio::biz::PortfolioBiz;
 use budget::manager::biz::portfolio::refresh::RefreshJob;
 use budget::manager::biz::BudgetBiz;
+use budget::manager::client::notification::GrpcNotificationSink;
 use budget::manager::client::IdentityClient;
 use budget::manager::repository::debt::DebtRepository;
 use budget::manager::repository::fx_rates::FxRateService;
@@ -63,13 +64,35 @@ async fn main() -> anyhow::Result<()> {
 
     let category_url =
         std::env::var("CATEGORY_GRPC_URL").unwrap_or_else(|_| "http://127.0.0.1:50104".to_string());
-    let biz = Arc::new(
-        BudgetBiz::new(repo, config.clone(), identity_client)
-            .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
-                &category_url,
-            )?)
-            .with_entry_client(entry_client()?),
-    );
+    // Notifications (plan 2026-11-09): off unless NOTIFY_PUBLISH_ENABLED. When on, the outbox
+    // drainer delivers to the notification service, the daily sweep enqueues debt reminders and
+    // member changes enqueue membership notifications.
+    let (_notify_shutdown_tx, notify_shutdown_rx) = tokio::sync::watch::channel(false);
+    let notify_cfg = philand_configs::NotifyPublisherConfig::from_env()
+        .map_err(|e| anyhow::anyhow!("Failed to load notification publisher config: {e}"))?;
+    let mut notifier = None;
+    let mut notify_outbox = None;
+    if notify_cfg.enabled {
+        let outbox_pool = sqlx::MySqlPool::connect(&config.database_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open notify outbox pool: {e}"))?;
+        let outbox = philand_event::MySqlOutbox::new(outbox_pool.clone(), "budget_notify_outbox")?;
+        notifier = Some(budget::manager::notifier::Notifier::new(
+            outbox.clone(),
+            outbox_pool,
+        ));
+        notify_outbox = Some(outbox);
+    }
+
+    let mut biz_builder = BudgetBiz::new(repo, config.clone(), identity_client)
+        .with_category_client(budget::manager::client::CategoryClient::connect_lazy(
+            &category_url,
+        )?)
+        .with_entry_client(entry_client()?);
+    if let Some(n) = notifier {
+        biz_builder = biz_builder.with_notifier(n);
+    }
+    let biz = Arc::new(biz_builder);
 
     // Wire Portfolio service in front of the same Budget repository pool.
 
@@ -144,6 +167,32 @@ async fn main() -> anyhow::Result<()> {
         Some(entry_client()?),
     ));
     spawn_debt_reconcile(debt_biz.clone());
+
+    if let Some(outbox) = notify_outbox {
+        let sink = Arc::new(GrpcNotificationSink::new(
+            &notify_cfg.notification_grpc_url,
+            &notify_cfg.internal_token,
+        )?);
+        tokio::spawn(philand_event::run_outbox_drainer(
+            Arc::new(outbox.clone()),
+            sink,
+            philand_event::DrainerConfig::from_env(),
+            notify_shutdown_rx,
+        ));
+        let hour = std::env::var("DEBT_REMINDER_HOUR")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|h| *h < 24)
+            .unwrap_or(7);
+        tokio::spawn(budget::manager::biz::debt::reminders::run_daily_reminders(
+            debt_biz.clone(),
+            outbox,
+            hour,
+        ));
+        tracing::info!(
+            "notification publishing enabled (debt reminders daily at {hour:02}:00 Asia/Saigon)"
+        );
+    }
     let debt_handler = DebtHandler::new(debt_biz);
 
     // Reuse the same pool for the scheduled refresh job.
@@ -188,7 +237,11 @@ async fn main() -> anyhow::Result<()> {
         "Portfolio maturity scan scheduled (interval = {}s)",
         maturity_interval
     );
-    let maturity_handle = tokio::spawn(async move {
+    // The explicit `JoinHandle<()>` keeps the future's output type pinned. Without it the
+    // async block's return type is inferred from the match arms in the loop, and clippy
+    // 1.100 (rust stable since 2026-11) then reports the `if let Err(e) = res` in the
+    // `select!` below as an irrefutable pattern.
+    let maturity_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(maturity_interval));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await; // skip first immediate tick

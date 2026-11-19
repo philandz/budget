@@ -152,11 +152,11 @@ struct StatusChange<'a> {
     require_zero: bool,
 }
 
-struct Loaded {
-    acc: DbDebtAccount,
+pub(super) struct Loaded {
+    pub(super) acc: DbDebtAccount,
     rates: Vec<sch::Rate>,
     rules: Vec<sch::PrepayRule>,
-    db_rates: Vec<DbRatePeriod>,
+    pub(super) db_rates: Vec<DbRatePeriod>,
     db_rules: Vec<DbPrepayRule>,
 }
 
@@ -255,7 +255,7 @@ impl DebtBiz {
         Ok(())
     }
 
-    async fn load(&self, budget_id: &str, account_id: &str) -> Result<Loaded, Status> {
+    pub(super) async fn load(&self, budget_id: &str, account_id: &str) -> Result<Loaded, Status> {
         let acc = self
             .repo
             .get_account(account_id)
@@ -300,7 +300,7 @@ impl DebtBiz {
         })
     }
 
-    fn project(&self, l: &Loaded, max_rows: usize) -> sch::Schedule {
+    pub(super) fn project(&self, l: &Loaded, max_rows: usize) -> sch::Schedule {
         if l.acc.status != "active" {
             return sch::Schedule::default();
         }

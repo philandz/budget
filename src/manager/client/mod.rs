@@ -1,3 +1,5 @@
+pub mod notification;
+
 use tonic::transport::Channel;
 use tonic::Status;
 

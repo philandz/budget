@@ -15,6 +15,9 @@ pub mod pb {
         pub mod debt {
             tonic::include_proto!("service.debt");
         }
+        pub mod notification {
+            tonic::include_proto!("service.notification");
+        }
         pub mod entry {
             tonic::include_proto!("service.entry");
         }

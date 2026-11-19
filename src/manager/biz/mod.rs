@@ -25,6 +25,8 @@ pub struct BudgetBiz {
     pub identity_client: Arc<Mutex<IdentityClient>>,
     pub category_client: Option<Arc<Mutex<CategoryClient>>>,
     entry_client: Option<Arc<Mutex<crate::manager::client::EntryClient>>>,
+    /// Set only when `NOTIFY_PUBLISH_ENABLED`; `None` = no notifications, behaviour as before.
+    notifier: Option<Arc<crate::manager::notifier::Notifier>>,
 }
 
 impl BudgetBiz {
@@ -39,7 +41,14 @@ impl BudgetBiz {
             identity_client: Arc::new(Mutex::new(identity_client)),
             category_client: None,
             entry_client: None,
+            notifier: None,
         }
+    }
+
+    /// Publishes membership notifications through the notify outbox.
+    pub fn with_notifier(mut self, notifier: crate::manager::notifier::Notifier) -> Self {
+        self.notifier = Some(Arc::new(notifier));
+        self
     }
 
     /// Lets budget reads fill `current_spend` from the Entry service (no direct reads of `entries`).
@@ -166,6 +175,7 @@ impl BudgetBiz {
             identity_client: Arc::new(Mutex::new(IdentityClient::test_only_unreachable())),
             category_client: None,
             entry_client: None,
+            notifier: None,
         }
     }
 
@@ -610,6 +620,15 @@ impl BudgetBiz {
             .add_member(budget_id, user_id, role)
             .await
             .map_err(Self::internal)?;
+        if let Some(n) = &self.notifier {
+            if let Ok(b) = self.repo.get_budget_by_id(budget_id).await {
+                let actor = (!system_actor).then_some(caller_id);
+                n.send(crate::manager::notifier::member_added_event(
+                    budget_id, &b.name, user_id, actor, role,
+                ))
+                .await;
+            }
+        }
         Ok(map_budget_member(db))
     }
 
@@ -633,6 +652,18 @@ impl BudgetBiz {
             .update_member_role(budget_id, user_id, role)
             .await
             .map_err(Self::internal)?;
+        if let Some(n) = &self.notifier {
+            if let Ok(b) = self.repo.get_budget_by_id(budget_id).await {
+                n.send(crate::manager::notifier::member_role_changed_event(
+                    budget_id,
+                    &b.name,
+                    user_id,
+                    Some(caller_id),
+                    role,
+                ))
+                .await;
+            }
+        }
         Ok(map_budget_member(db))
     }
 
