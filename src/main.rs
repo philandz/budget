@@ -237,7 +237,11 @@ async fn main() -> anyhow::Result<()> {
         "Portfolio maturity scan scheduled (interval = {}s)",
         maturity_interval
     );
-    let maturity_handle = tokio::spawn(async move {
+    // The explicit `JoinHandle<()>` keeps the future's output type pinned. Without it the
+    // async block's return type is inferred from the match arms in the loop, and clippy
+    // 1.100 (rust stable since 2026-11) then reports the `if let Err(e) = res` in the
+    // `select!` below as an irrefutable pattern.
+    let maturity_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(maturity_interval));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         ticker.tick().await; // skip first immediate tick
